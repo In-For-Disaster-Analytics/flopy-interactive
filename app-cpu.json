@@ -1,6 +1,6 @@
 {
   "id": "flopy-jupyter-cpu",
-  "version": "0.0.2:sha-ada3371",
+  "version": "0.0.2:sha-5f4faac",
   "description": "Jupyter Lab environment for CPU",
   "owner": "${apiUserId}",
   "enabled": true,
