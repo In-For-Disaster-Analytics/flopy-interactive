@@ -7,6 +7,7 @@ dependencies:
   - jupyterlab
   - plotly
   - ipywidgets
+  - jupyterlab_widgets
   - ipyleaflet
   - geopandas
   - fiona
