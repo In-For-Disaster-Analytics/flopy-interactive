@@ -10,6 +10,7 @@ dependencies:
   - ipykernel
   - pandas
   - matplotlib
+  - geopandas
   - flopy
   - gitpython
   - pooch
