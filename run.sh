@@ -50,6 +50,11 @@ function install_conda() {
 	unset PYTHONPATH
 }
 
+function ensure_base_widgets() {
+	echo "Ensuring widgets are installed in base environment..."
+	conda install -n base -c conda-forge --yes anywidget ipywidgets jupyterlab_widgets
+}
+
 function load_cuda() {
 	echo "Loading CUDA..."
 	module load cuda/12.0
@@ -274,6 +279,7 @@ function handle_installation() {
 
 #Execution
 install_conda
+ensure_base_widgets
 if [ "$IS_GPU_JOB" = "true" ]; then
 	load_cuda
 fi

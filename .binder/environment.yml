@@ -6,6 +6,7 @@ dependencies:
   - numpy=1.26.4
   - jupyterlab
   - plotly
+  - anywidget
   - ipywidgets
   - jupyterlab_widgets
   - ipyleaflet
