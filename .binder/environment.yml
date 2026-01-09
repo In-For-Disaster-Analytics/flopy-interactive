@@ -7,6 +7,9 @@ dependencies:
   - jupyterlab
   - plotly
   - ipywidgets
+  - ipyleaflet
+  - geopandas
+  - fiona
   - ipykernel
   - pandas
   - matplotlib
