@@ -312,7 +312,25 @@ def _load_grid_resource(resource: Dict, dest_dir: Path) -> gpd.GeoDataFrame:
     return _prepare_grid_gdf(gdf)
 
 
-def load_rch(rch_path: Path, nrow: int, ncol: int, nper: int = 1) -> flopy.modflow.ModflowRch:
+def _load_rch_numeric(rch_path: Path, nrow: int, ncol: int) -> np.ndarray:
+    text = rch_path.read_text()
+    values: List[float] = []
+    for token in text.replace(",", " ").split():
+        try:
+            values.append(float(token))
+        except ValueError:
+            continue
+    if len(values) < nrow * ncol:
+        raise ValueError("Not enough numeric values to build an RCH array.")
+    count = len(values)
+    if count % (nrow * ncol) == 0:
+        arr = np.array(values, dtype=float).reshape((count // (nrow * ncol), nrow, ncol))
+    else:
+        arr = np.array(values[-nrow * ncol :], dtype=float).reshape((nrow, ncol))
+    return arr
+
+
+def load_rch(rch_path: Path, nrow: int, ncol: int, nper: int = 1):
     model = flopy.modflow.Modflow(modelname="rch_read", model_ws=str(rch_path.parent))
     flopy.modflow.ModflowDis(
         model,
@@ -325,11 +343,17 @@ def load_rch(rch_path: Path, nrow: int, ncol: int, nper: int = 1) -> flopy.modfl
         top=1.0,
         botm=[0.0],
     )
-    return flopy.modflow.ModflowRch.load(str(rch_path), model)
+    try:
+        return flopy.modflow.ModflowRch.load(str(rch_path), model)
+    except Exception:
+        return _load_rch_numeric(rch_path, nrow, ncol)
 
 
-def _rch_to_arrays(rch: flopy.modflow.ModflowRch) -> List[np.ndarray]:
-    data = rch.rech
+def _rch_to_arrays(rch) -> List[np.ndarray]:
+    if hasattr(rch, "rech"):
+        data = rch.rech
+    else:
+        data = rch
     if hasattr(data, "array"):
         arr = np.array(data.array)
     elif isinstance(data, dict):
@@ -343,22 +367,59 @@ def _rch_to_arrays(rch: flopy.modflow.ModflowRch) -> List[np.ndarray]:
     raise ValueError("Unsupported RCH array shape.")
 
 
-def build_rch_cells(rch: flopy.modflow.ModflowRch, gdf: gpd.GeoDataFrame) -> Dict[int, float]:
-    arrays = _rch_to_arrays(rch)
+def _map_rch_cells(
+    arrays: Sequence[np.ndarray], gdf: gpd.GeoDataFrame
+) -> Dict[int, float]:
     cell_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
-    cells: Dict[int, float] = {}
-    for row, col in cell_lookup:
-        row_idx = int(row) - 1
-        col_idx = int(col) - 1
-        values = []
-        for arr in arrays:
-            if 0 <= row_idx < arr.shape[0] and 0 <= col_idx < arr.shape[1]:
-                values.append(float(arr[row_idx, col_idx]))
-        if not values:
-            continue
-        flux = max(values, key=lambda v: abs(v))
-        cells[int(cell_lookup[(row, col)])] = flux
-    return cells
+
+    def _collect(offset: int, swap: bool) -> Dict[int, float]:
+        cells: Dict[int, float] = {}
+        for row, col in cell_lookup:
+            if swap:
+                row_idx = int(col) + offset
+                col_idx = int(row) + offset
+            else:
+                row_idx = int(row) + offset
+                col_idx = int(col) + offset
+            values = []
+            for arr in arrays:
+                if 0 <= row_idx < arr.shape[0] and 0 <= col_idx < arr.shape[1]:
+                    values.append(float(arr[row_idx, col_idx]))
+            if not values:
+                continue
+            flux = max(values, key=lambda v: abs(v))
+            cells[int(cell_lookup[(row, col)])] = flux
+        return cells
+
+    candidates = [
+        _collect(0, False),
+        _collect(-1, False),
+        _collect(0, True),
+        _collect(-1, True),
+    ]
+    return max(candidates, key=lambda c: sum(1 for v in c.values() if v != 0.0))
+
+
+def build_rch_cells(rch, gdf: gpd.GeoDataFrame) -> Dict[int, float]:
+    arrays = _rch_to_arrays(rch)
+    return _map_rch_cells(arrays, gdf)
+
+
+def build_rch_cells_for_periods(
+    rch,
+    gdf: gpd.GeoDataFrame,
+    periods: Sequence[int],
+) -> Dict[int, float]:
+    arrays = _rch_to_arrays(rch)
+    if periods:
+        selected = [arrays[p] for p in periods if 0 <= p < len(arrays)]
+        if not selected:
+            selected = arrays
+    else:
+        selected = arrays
+    if not selected:
+        return {}
+    return _map_rch_cells(selected, gdf)
 
 
 def _update_flux_customdata(
@@ -384,6 +445,31 @@ def _update_flux_customdata(
         ],
         axis=1,
     )
+
+
+def _collect_wel_cells_for_period_data(
+    wel: flopy.modflow.ModflowWel,
+    cell_id_lookup: Dict[Tuple[int, int], int],
+    period: int,
+    row_offset: int,
+    col_offset: int,
+) -> Dict[int, float]:
+    cells: Dict[int, float] = {}
+    spd = wel.stress_period_data.data
+    if period not in spd:
+        return cells
+    recs = spd[period]
+    for rec in recs:
+        row = int(rec["i"]) + row_offset
+        col = int(rec["j"]) + col_offset
+        cell_id = cell_id_lookup.get((row, col))
+        if cell_id is None:
+            continue
+        flux = float(rec["flux"])
+        cell_key = int(cell_id)
+        if cell_key not in cells or abs(flux) > abs(cells[cell_key]):
+            cells[cell_key] = flux
+    return cells
 
 
 def _signed_log(values: Sequence[float]) -> List[float]:
@@ -513,10 +599,11 @@ def build_plotly_selector(
     center_lon = float(gdf["_lon"].median())
 
     fig = go.FigureWidget()
+    fig._skip_invalid = True
     wel_cells = wel_cells or {}
     z_values = [float(wel_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
     fig.add_trace(
-        go.Choroplethmap(
+        go.Choroplethmapbox(
             geojson=grid_geojson,
             locations=gdf["CELL_ID"],
             z=z_values,
@@ -549,7 +636,7 @@ def build_plotly_selector(
     )
     scatter_flux = [float(wel_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
     fig.add_trace(
-        go.Scattermap(
+        go.Scattermapbox(
             lon=gdf["_lon"],
             lat=gdf["_lat"],
             mode="markers",
@@ -596,7 +683,7 @@ def build_plotly_selector(
         )
     )
     fig.add_trace(
-        go.Scattermap(
+        go.Scattermapbox(
             lon=[],
             lat=[],
             mode="markers",
@@ -612,7 +699,7 @@ def build_plotly_selector(
         margin=dict(l=0, r=0, t=0, b=0),
         dragmode="lasso",
         clickmode="event+select",
-        map=dict(
+        mapbox=dict(
             style="open-street-map",
             center=dict(lat=center_lat, lon=center_lon),
             zoom=8,
@@ -666,7 +753,8 @@ def apply_rate_update(
     new_rate: float,
     rate_mode: str,
     add_missing: bool,
-    layer_for_new: int,
+    layers_for_new: Sequence[int],
+    periods_for_update: Sequence[int],
     output_path: Path,
 ) -> int:
     spd = wel.stress_period_data.data
@@ -675,6 +763,9 @@ def apply_rate_update(
     new_spd = {}
     for per, recs in spd.items():
         recs = recs.copy()
+        if periods_for_update and per not in periods_for_update:
+            new_spd[per] = recs
+            continue
         mask = []
         for rec in recs:
             i = int(rec["i"])
@@ -689,13 +780,17 @@ def apply_rate_update(
             existing = set((int(r["i"]), int(r["j"])) for r in recs)
             to_add = [cell for cell in selected_cells if cell not in existing]
             if to_add:
-                new_recs = np.zeros(len(recs) + len(to_add), dtype=recs.dtype)
+                layers = [int(layer) for layer in layers_for_new] or [1]
+                new_recs = np.zeros(len(recs) + len(to_add) * len(layers), dtype=recs.dtype)
                 new_recs[: len(recs)] = recs
-                for idx, (row, col) in enumerate(to_add, start=len(recs)):
-                    new_recs[idx]["k"] = int(layer_for_new)
-                    new_recs[idx]["i"] = int(row)
-                    new_recs[idx]["j"] = int(col)
-                    new_recs[idx]["flux"] = float(new_rate)
+                idx = len(recs)
+                for row, col in to_add:
+                    for layer in layers:
+                        new_recs[idx]["k"] = int(layer)
+                        new_recs[idx]["i"] = int(row)
+                        new_recs[idx]["j"] = int(col)
+                        new_recs[idx]["flux"] = float(new_rate)
+                        idx += 1
                 recs = new_recs
         new_spd[per] = recs
     wel.stress_period_data = new_spd
@@ -726,6 +821,13 @@ def build_ui(
                     cells[cell_key] = flux
         return cells
 
+    def _collect_wel_cells_for_period(
+        period: int, row_offset: int, col_offset: int
+    ) -> Dict[int, float]:
+        return _collect_wel_cells_for_period_data(
+            wel, cell_id_lookup, period, row_offset, col_offset
+        )
+
     wel_cells = _collect_wel_cells(0, 0)
     wel_cells_offset = _collect_wel_cells(1, 1)
     use_offset = len(wel_cells_offset) > len(wel_cells)
@@ -755,6 +857,7 @@ def build_ui(
         <b>Rate mode:</b> <i>Set</i> replaces the rate, <i>Scale (%)</i> applies a percent change.<br>
         <b>New rate:</b> For <i>Set</i>, use the absolute pumping rate (negative for pumping). For
         <i>Scale (%)</i>, use percent change (e.g., 10 = +10%, -10 = -10%).<br>
+        <b>Stress periods:</b> Controls which periods are displayed and updated.<br>
         <b>Layer (k):</b> Used only when adding missing wells. 1 = top layer.<br>
         <b>Add missing wells:</b> Add wells in selected cells not present in the WEL.
         """
@@ -769,14 +872,42 @@ def build_ui(
         value="flux",
         description="Color by",
     )
+    spd_keys = sorted(list(wel.stress_period_data.data.keys()))
+    if not spd_keys:
+        spd_keys = [0]
+    period_options = [(f"SP {idx + 1}", idx) for idx in spd_keys]
+    period_select = widgets.SelectMultiple(
+        options=period_options,
+        value=(spd_keys[0],),
+        description="Stress periods",
+    )
+    active_periods: List[int] = [int(spd_keys[0])]
+
     flux_source_options = [("WEL", "wel")]
-    if rch_cells:
+    if rch is not None:
         flux_source_options.append(("RCH", "rch"))
     flux_source = widgets.Dropdown(
         options=flux_source_options,
         value="wel",
         description="Flux source",
     )
+    rch_status = widgets.Label(
+        value="RCH loaded: yes" if rch is not None else "RCH loaded: no"
+    )
+    rch_stats = widgets.Label(value="")
+    if rch is not None:
+        try:
+            arrays = _rch_to_arrays(rch)
+            flat = np.concatenate([arr.ravel() for arr in arrays]) if arrays else np.array([])
+            if flat.size:
+                nonzero = int(np.count_nonzero(flat))
+                rmin = float(np.nanmin(flat))
+                rmax = float(np.nanmax(flat))
+                rch_stats.value = f"RCH stats: min={rmin:.6g}, max={rmax:.6g}, nonzero={nonzero}"
+            else:
+                rch_stats.value = "RCH stats: no data"
+        except Exception as exc:
+            rch_stats.value = f"RCH stats: error ({exc})"
     category_select = widgets.Combobox(
         options=[],
         description="Category",
@@ -784,14 +915,25 @@ def build_ui(
     )
     select_category_btn = widgets.Button(description="Select category")
     rate_input = widgets.FloatText(value=-20.0, description="New rate")
-    layer_input = widgets.IntText(value=1, description="Layer (k)")
+    nlay = 1
+    if hasattr(wel, "parent") and wel.parent is not None:
+        nlay = int(getattr(wel.parent.dis, "nlay", 1))
+    elif hasattr(wel, "model") and wel.model is not None:
+        nlay = int(getattr(wel.model.dis, "nlay", 1))
+    elif hasattr(wel, "_model") and wel._model is not None:
+        nlay = int(getattr(wel._model.dis, "nlay", 1))
+    layer_options = [(str(layer), layer) for layer in range(1, nlay + 1)]
+    layer_input = widgets.SelectMultiple(
+        options=layer_options,
+        value=(1,),
+        description="Layer (k)",
+    )
     add_missing = widgets.Checkbox(value=False, description="Add missing wells")
     save_btn = widgets.Button(description="Apply + Save", button_style="primary")
     output = widgets.Output()
     dataset_fetch_btn = widgets.Button(description="Fetch CKAN datasets")
     dataset_dropdown = widgets.Dropdown(options=[], description="Dataset")
     dataset_status = widgets.Label(value="CKAN datasets: not loaded")
-    dataset_details = widgets.HTML(value="")
     dataset_lookup: Dict[str, Dict] = {}
 
     def _apply_and_save(_):
@@ -807,7 +949,8 @@ def build_ui(
                 rate_input.value,
                 rate_mode.value,
                 add_missing.value,
-                layer_input.value,
+                list(layer_input.value),
+                active_periods,
                 Path("barton_springs_updated.wel"),
             )
             print(f"Updated {updated} cells. Wrote barton_springs_updated.wel")
@@ -844,21 +987,52 @@ def build_ui(
 
     flux_source.observe(_on_flux_source_change, names="value")
 
+    def _refresh_period_cells() -> None:
+        nonlocal wel_cells, rch_cells, use_offset
+        if active_periods:
+            wel_cells_all = {}
+            for period in active_periods:
+                period_cells = _collect_wel_cells_for_period(period, 0, 0)
+                for cid, flux in period_cells.items():
+                    if cid not in wel_cells_all or abs(flux) > abs(wel_cells_all[cid]):
+                        wel_cells_all[cid] = flux
+            wel_cells_offset = {}
+            for period in active_periods:
+                period_cells = _collect_wel_cells_for_period(period, 1, 1)
+                for cid, flux in period_cells.items():
+                    if cid not in wel_cells_offset or abs(flux) > abs(wel_cells_offset[cid]):
+                        wel_cells_offset[cid] = flux
+        else:
+            wel_cells_all = _collect_wel_cells(0, 0)
+            wel_cells_offset = _collect_wel_cells(1, 1)
+        use_offset = len(wel_cells_offset) > len(wel_cells_all)
+        wel_cells = wel_cells_offset if use_offset else wel_cells_all
+        if rch is not None:
+            try:
+                rch_cells = build_rch_cells_for_periods(rch, gdf, active_periods)
+            except Exception:
+                rch_cells = {}
+        match_info.value = (
+            f"WEL/grid matches: {len(wel_cells)} cells"
+            + (" (using +1 row/col offset)" if use_offset else "")
+        )
+        active_cells = wel_cells if flux_source.value == "wel" else rch_cells
+        flux_values = [float(active_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
+        _update_flux_customdata(fig, gdf, flux_values)
+        _apply_color_mode(fig, gdf, active_cells, color_by.value)
+
+    def _on_period_change(change):
+        if change.get("name") == "value":
+            selected = list(change["new"])
+            active_periods.clear()
+            active_periods.extend([int(p) for p in selected])
+            _refresh_period_cells()
+
+    period_select.observe(_on_period_change, names="value")
+
     def _update_dataset_details(name: str) -> None:
         dataset = dataset_lookup.get(name)
-        if not dataset:
-            dataset_details.value = ""
-            return
-        def _fmt(res_list):
-            return "<br>".join(
-                [f"{res.get('name','(unnamed)')} - {res.get('url','')}" for res in res_list]
-            )
-        details = (
-            f"<b>WEL:</b><br>{_fmt(dataset['matches']['wel'])}<br>"
-            f"<b>GRID:</b><br>{_fmt(dataset['matches']['grid'])}<br>"
-            f"<b>RCH:</b><br>{_fmt(dataset['matches']['rch'])}"
-        )
-        dataset_details.value = details
+        dataset_details.value = ""
 
     def _fetch_ckan(_):
         dataset_status.value = "CKAN datasets: loading..."
@@ -915,11 +1089,15 @@ def build_ui(
 
     _on_color_change({"name": "value", "new": color_by.value})
     _on_flux_source_change({"name": "value", "new": flux_source.value})
+    _refresh_period_cells()
 
     controls = widgets.VBox(
         [
             match_info,
             flux_source,
+            period_select,
+            rch_status,
+            rch_stats,
             color_by,
             category_select,
             select_category_btn,
@@ -940,7 +1118,6 @@ def build_ui(
                 [
                     widgets.HBox([dataset_fetch_btn, dataset_dropdown]),
                     dataset_status,
-                    dataset_details,
                 ]
             )
         )
@@ -972,21 +1149,7 @@ def render_ui_from_ckan(data_dir: Path = Path("ckan_data")) -> None:
 
     def _update_dataset_details(name: str) -> None:
         dataset = dataset_lookup.get(name)
-        if not dataset:
-            dataset_details.value = ""
-            return
-
-        def _fmt(res_list):
-            return "<br>".join(
-                [f"{res.get('name','(unnamed)')} - {res.get('url','')}" for res in res_list]
-            )
-
-        details = (
-            f"<b>WEL:</b><br>{_fmt(dataset['matches']['wel'])}<br>"
-            f"<b>GRID:</b><br>{_fmt(dataset['matches']['grid'])}<br>"
-            f"<b>RCH:</b><br>{_fmt(dataset['matches']['rch'])}"
-        )
-        dataset_details.value = details
+        return
 
     def _fetch_ckan(_):
         dataset_status.value = "CKAN datasets: loading..."
@@ -1033,9 +1196,17 @@ def render_ui_from_ckan(data_dir: Path = Path("ckan_data")) -> None:
                 nrow = int(gdf["ROW"].max())
                 ncol = int(gdf["COL"].max())
                 try:
-                    rch = load_rch(rch_path, nrow=nrow, ncol=ncol, nper=wel.nper)
-                except Exception:
+                    nper = 1
+                    spd = getattr(wel, "stress_period_data", None)
+                    if spd is not None and hasattr(spd, "data"):
+                        keys = list(spd.data.keys())
+                        if keys:
+                            nper = int(max(keys)) + 1
+                    rch = load_rch(rch_path, nrow=nrow, ncol=ncol, nper=nper)
+                    print(f"RCH loaded from {rch_path}")
+                except Exception as exc:
                     rch = None
+                    print(f"RCH load failed: {exc}")
                 ui = build_ui(wel, gdf, show_dataset_controls=False, rch=rch)
                 display(ui)
             except Exception as exc:
@@ -1050,7 +1221,6 @@ def render_ui_from_ckan(data_dir: Path = Path("ckan_data")) -> None:
                     [
                         widgets.HBox([dataset_dropdown, load_btn]),
                         dataset_status,
-                        dataset_details,
                     ]
                 ),
                 output,
