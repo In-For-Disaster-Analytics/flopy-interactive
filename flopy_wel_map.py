@@ -5,15 +5,25 @@ from __future__ import annotations
 
 import shutil
 import zipfile
+import json
+import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
+from urllib.request import urlopen
 
 import flopy
 import geopandas as gpd
 import numpy as np
 import plotly.graph_objects as go
+from plotly import colors as pc
 import ipywidgets as widgets
 from IPython.display import display, clear_output
+
+warnings.filterwarnings(
+    "ignore",
+    message="The 'shapely.geos' module is deprecated",
+    category=DeprecationWarning,
+)
 
 
 def _flatten_single_dir(root: Path) -> None:
@@ -114,16 +124,389 @@ def load_wel(wel_path: Path) -> flopy.modflow.ModflowWel:
 
 def load_grid_gdf(grid_gdb: Path, layer_name: str) -> gpd.GeoDataFrame:
     gdf = gpd.read_file(grid_gdb, layer=layer_name)
+    return _prepare_grid_gdf(gdf)
+
+
+def _extract_standard_vars(resource: Dict) -> List[str]:
+    candidates: List[str] = []
+    direct_keys = ("MINT Standard Variables", "mint_standard_variables", "standard_variables")
+    for key in direct_keys:
+        if key in resource and resource[key] is not None:
+            candidates.append(resource[key])
+    extras = resource.get("extras")
+    if isinstance(extras, list):
+        for item in extras:
+            if not isinstance(item, dict):
+                continue
+            if item.get("key") == "MINT Standard Variables":
+                candidates.append(item.get("value"))
+    elif isinstance(extras, dict) and "MINT Standard Variables" in extras:
+        candidates.append(extras.get("MINT Standard Variables"))
+
+    values: List[str] = []
+    for entry in candidates:
+        if entry is None:
+            continue
+        if isinstance(entry, (list, tuple)):
+            values.extend([str(v) for v in entry])
+            continue
+        if isinstance(entry, str):
+            text = entry.strip()
+            if not text:
+                continue
+            if text.startswith("[") or text.startswith("{"):
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, list):
+                        values.extend([str(v) for v in parsed])
+                        continue
+                except json.JSONDecodeError:
+                    pass
+            values.extend([v.strip() for v in text.replace(";", ",").split(",") if v.strip()])
+            continue
+        values.append(str(entry))
+    return values
+
+
+def _resource_has_standard_var(resource: Dict, target: str) -> bool:
+    target_key = target.strip().lower()
+    for value in _extract_standard_vars(resource):
+        if value.strip().lower() == target_key:
+            return True
+    return False
+
+
+def _search_ckan_datasets() -> List[Dict]:
+    base_url = "https://ckan.tacc.utexas.edu/api/3/action/package_search"
+    start = 0
+    rows = 100
+    matched: List[Dict] = []
+    targets = {
+        "wel": "groundwater_well__recharge_volume_flux",
+        "grid": "model_grid_cell_boundary_groundwater__interfacial_hydraulic_conductance",
+        "rch": "groundwater__recharge_volume_flux",
+    }
+
+    while True:
+        url = f"{base_url}?rows={rows}&start={start}"
+        with urlopen(url) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        if not payload.get("success"):
+            raise RuntimeError("CKAN search failed.")
+        result = payload["result"]
+        results = result.get("results", [])
+        for pkg in results:
+            resources = pkg.get("resources", [])
+            matches = {"wel": [], "grid": [], "rch": []}
+            for res in resources:
+                if _resource_has_standard_var(res, targets["wel"]):
+                    matches["wel"].append(res)
+                if _resource_has_standard_var(res, targets["grid"]):
+                    matches["grid"].append(res)
+                if _resource_has_standard_var(res, targets["rch"]):
+                    matches["rch"].append(res)
+            if all(matches[key] for key in matches):
+                matched.append(
+                    {
+                        "name": pkg.get("name") or pkg.get("id"),
+                        "title": pkg.get("title") or pkg.get("name") or pkg.get("id"),
+                        "matches": matches,
+                    }
+                )
+        start += rows
+        if start >= result.get("count", 0):
+            break
+    return matched
+
+
+def _download_ckan_resource(resource: Dict, dest_dir: Path) -> Path:
+    url = resource.get("url")
+    if not url:
+        raise ValueError("CKAN resource missing URL.")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    filename = Path(url.split("?", 1)[0]).name
+    if not filename:
+        filename = resource.get("name") or resource.get("id") or "resource"
+    dest_path = dest_dir / filename
+    if dest_path.exists():
+        return dest_path
+    from urllib.request import urlretrieve
+
+    urlretrieve(url, dest_path)
+    return dest_path
+
+
+def _extract_zip(zip_path: Path) -> Path:
+    extract_dir = zip_path.with_suffix("")
+    if extract_dir.exists():
+        return extract_dir
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(extract_dir)
+    _flatten_single_dir(extract_dir)
+    return extract_dir
+
+
+def _prepare_grid_gdf(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    if gdf.crs is None:
+        centroids = gdf.geometry.centroid
+        gdf["_lon"] = centroids.x
+        gdf["_lat"] = centroids.y
+        return gdf
+
+    try:
+        if gdf.crs.is_geographic:
+            projected = gdf.to_crs(gdf.estimate_utm_crs())
+        else:
+            projected = gdf
+    except Exception:
+        projected = gdf
+
+    centroids = projected.geometry.centroid
+    try:
+        centroids_ll = centroids.to_crs("EPSG:4326")
+    except Exception:
+        centroids_ll = centroids
+
+    gdf["_lon"] = centroids_ll.x
+    gdf["_lat"] = centroids_ll.y
     gdf = gdf.to_crs("EPSG:4326")
-    centroids = gdf.geometry.centroid
-    gdf["_lon"] = centroids.x
-    gdf["_lat"] = centroids.y
     return gdf
+
+
+def _load_grid_from_gdb(gdb_path: Path) -> gpd.GeoDataFrame:
+    try:
+        import fiona
+    except ImportError as exc:
+        raise ImportError("fiona is required to read a geodatabase.") from exc
+    layers = fiona.listlayers(gdb_path)
+    if not layers:
+        raise ValueError(f"No layers found in {gdb_path}.")
+    gdf = gpd.read_file(gdb_path, layer=layers[0])
+    return _prepare_grid_gdf(gdf)
+
+
+def _find_grid_data_path(root: Path) -> Path | None:
+    if root.is_dir():
+        gdbs = list(root.rglob("*.gdb"))
+        if gdbs:
+            return gdbs[0]
+        for ext in (".shp", ".geojson", ".gpkg", ".json"):
+            matches = list(root.rglob(f"*{ext}"))
+            if matches:
+                return matches[0]
+        return None
+    return root
+
+
+def _load_grid_resource(resource: Dict, dest_dir: Path) -> gpd.GeoDataFrame:
+    path = _download_ckan_resource(resource, dest_dir)
+    if path.suffix.lower() == ".zip":
+        path = _extract_zip(path)
+    grid_path = _find_grid_data_path(path)
+    if grid_path is None:
+        raise ValueError("No grid dataset found after extracting resource.")
+    if grid_path.suffix.lower() == ".gdb":
+        return _load_grid_from_gdb(grid_path)
+    gdf = gpd.read_file(grid_path)
+    return _prepare_grid_gdf(gdf)
+
+
+def load_rch(rch_path: Path, nrow: int, ncol: int, nper: int = 1) -> flopy.modflow.ModflowRch:
+    model = flopy.modflow.Modflow(modelname="rch_read", model_ws=str(rch_path.parent))
+    flopy.modflow.ModflowDis(
+        model,
+        nlay=1,
+        nrow=nrow,
+        ncol=ncol,
+        nper=nper,
+        delr=1.0,
+        delc=1.0,
+        top=1.0,
+        botm=[0.0],
+    )
+    return flopy.modflow.ModflowRch.load(str(rch_path), model)
+
+
+def _rch_to_arrays(rch: flopy.modflow.ModflowRch) -> List[np.ndarray]:
+    data = rch.rech
+    if hasattr(data, "array"):
+        arr = np.array(data.array)
+    elif isinstance(data, dict):
+        arr = np.stack([np.array(v) for v in data.values()])
+    else:
+        arr = np.array(data)
+    if arr.ndim == 2:
+        return [arr]
+    if arr.ndim == 3:
+        return [arr[idx] for idx in range(arr.shape[0])]
+    raise ValueError("Unsupported RCH array shape.")
+
+
+def build_rch_cells(rch: flopy.modflow.ModflowRch, gdf: gpd.GeoDataFrame) -> Dict[int, float]:
+    arrays = _rch_to_arrays(rch)
+    cell_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
+    cells: Dict[int, float] = {}
+    for row, col in cell_lookup:
+        row_idx = int(row) - 1
+        col_idx = int(col) - 1
+        values = []
+        for arr in arrays:
+            if 0 <= row_idx < arr.shape[0] and 0 <= col_idx < arr.shape[1]:
+                values.append(float(arr[row_idx, col_idx]))
+        if not values:
+            continue
+        flux = max(values, key=lambda v: abs(v))
+        cells[int(cell_lookup[(row, col)])] = flux
+    return cells
+
+
+def _update_flux_customdata(
+    fig: go.FigureWidget, gdf: gpd.GeoDataFrame, flux_values: Sequence[float]
+) -> None:
+    fig.data[0].customdata = np.stack(
+        [
+            gdf["CELL_ID"],
+            flux_values,
+            gdf["GCD_Name"].fillna("Unknown").astype(str),
+            gdf["PGMA_Name"].fillna("Unknown").astype(str),
+        ],
+        axis=1,
+    )
+    fig.data[1].customdata = np.stack(
+        [
+            gdf["CELL_ID"],
+            gdf["ROW"],
+            gdf["COL"],
+            flux_values,
+            gdf["GCD_Name"].fillna("Unknown").astype(str),
+            gdf["PGMA_Name"].fillna("Unknown").astype(str),
+        ],
+        axis=1,
+    )
+
+
+def _signed_log(values: Sequence[float]) -> List[float]:
+    return [float(np.sign(v) * np.log10(1.0 + abs(v))) for v in values]
+
+
+def _signed_range(values: Sequence[float]) -> Tuple[float, float]:
+    if not values:
+        return 0.0, 1.0
+    vmin = min(values)
+    vmax = max(values)
+    if vmin < 0.0 and vmax > 0.0:
+        max_abs = max(abs(vmin), abs(vmax))
+        return -max_abs, max_abs
+    if vmax <= 0.0:
+        return vmin, 0.0
+    return 0.0, vmax
+
+
+def _discrete_colorscale(colors: Sequence[str], count: int) -> List[Tuple[float, str]]:
+    if count <= 1:
+        return [(0.0, colors[0]), (1.0, colors[0])]
+    scale: List[Tuple[float, str]] = []
+    for idx, color in enumerate(colors):
+        t0 = idx / (count - 1)
+        t1 = min((idx + 1) / (count - 1), 1.0)
+        scale.append((t0, color))
+        scale.append((t1, color))
+    return scale
+
+
+def _apply_color_mode(
+    fig: go.FigureWidget,
+    gdf: gpd.GeoDataFrame,
+    wel_cells: Dict[int, float],
+    mode: str,
+) -> None:
+    cell_ids = gdf["CELL_ID"].tolist()
+    flux_values = [float(wel_cells.get(int(cid), 0.0)) for cid in cell_ids]
+    diverging = [(0.0, "#2b6cb0"), (0.5, "#ffffff"), (1.0, "#c53030")]
+
+    if mode == "flux":
+        z_log = _signed_log(flux_values)
+        zmin, zmax = _signed_range(z_log)
+        nonzero = [v for v in flux_values if v != 0.0]
+        if nonzero:
+            fmin = min(nonzero)
+            fmax = max(nonzero)
+            if fmin < 0.0 and fmax > 0.0:
+                fmax_abs = max(abs(fmin), abs(fmax))
+                tick_values = [
+                    -fmax_abs,
+                    -fmax_abs / 10.0,
+                    0.0,
+                    fmax_abs / 10.0,
+                    fmax_abs,
+                ]
+            elif fmax <= 0.0:
+                tick_values = [fmin, fmin / 10.0, 0.0]
+            else:
+                tick_values = [0.0, fmax / 10.0, fmax]
+            tick_vals = [np.sign(v) * np.log10(1.0 + abs(v)) for v in tick_values]
+            tick_text = [f"{v:.0f}" for v in tick_values]
+        else:
+            tick_vals, tick_text = None, None
+
+        with fig.batch_update():
+            fig.data[0].update(z=z_log, zmin=zmin, zmax=zmax, colorscale=diverging)
+            fig.data[1].marker.update(
+                color=z_log,
+                colorscale=diverging,
+                cmin=zmin,
+                cmax=zmax,
+                showscale=True,
+                colorbar=dict(
+                    title="Flux",
+                    tickvals=tick_vals,
+                    ticktext=tick_text,
+                    orientation="v",
+                    x=1.02,
+                    xanchor="left",
+                    y=0.5,
+                    yanchor="middle",
+                    len=0.8,
+                ),
+            )
+        return
+
+    col = "GCD_Name" if mode == "GCD_Name" else "PGMA_Name"
+    categories = gdf[col].fillna("Unknown").astype(str).tolist()
+    labels = list(dict.fromkeys(categories))
+    label_map = {label: idx for idx, label in enumerate(labels)}
+    codes = [label_map[value] for value in categories]
+    palette = pc.qualitative.Safe
+    colors = [palette[idx % len(palette)] for idx in range(len(labels))]
+    colorscale = _discrete_colorscale(colors, max(1, len(labels)))
+    cmax = max(1, len(labels) - 1)
+
+    with fig.batch_update():
+        fig.data[0].update(z=codes, zmin=0.0, zmax=cmax, colorscale=colorscale)
+        fig.data[1].marker.update(
+            color=codes,
+            colorscale=colorscale,
+            cmin=0.0,
+            cmax=cmax,
+            showscale=True,
+            colorbar=dict(
+                title=col,
+                tickvals=list(range(len(labels))),
+                ticktext=labels,
+                orientation="v",
+                x=1.02,
+                xanchor="left",
+                y=0.5,
+                yanchor="middle",
+                len=0.8,
+            ),
+        )
 
 
 def build_plotly_selector(
     gdf: gpd.GeoDataFrame, wel_cells: Dict[int, float] | None = None
-) -> Tuple[go.FigureWidget, widgets.Label, set]:
+) -> Tuple[go.FigureWidget, widgets.Label, widgets.Label, set, callable]:
     gdf_map = gdf[["CELL_ID", "ROW", "COL", "geometry"]].copy()
     grid_geojson = gdf_map.set_index("CELL_ID").__geo_interface__
     center_lat = float(gdf["_lat"].median())
@@ -131,31 +514,12 @@ def build_plotly_selector(
 
     fig = go.FigureWidget()
     wel_cells = wel_cells or {}
-
-    def _signed_log(values: List[float]) -> List[float]:
-        return [np.sign(v) * np.log10(1.0 + abs(v)) for v in values]
-
     z_values = [float(wel_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
-    z_log = _signed_log(z_values)
-    if z_log:
-        zmin = min(z_log)
-        zmax = max(z_log)
-        if zmin < 0.0 and zmax > 0.0:
-            max_abs = max(abs(zmin), abs(zmax))
-            zmin, zmax = -max_abs, max_abs
-        elif zmax <= 0.0:
-            zmax = 0.0
-        elif zmin >= 0.0:
-            zmin = 0.0
-    else:
-        zmin, zmax = 0.0, 1.0
     fig.add_trace(
         go.Choroplethmap(
             geojson=grid_geojson,
             locations=gdf["CELL_ID"],
-            z=z_log,
-            zmin=zmin,
-            zmax=zmax,
+            z=z_values,
             colorscale=[
                 (0.0, "#2b6cb0"),
                 (0.5, "#ffffff"),
@@ -166,45 +530,24 @@ def build_plotly_selector(
             marker_line_color="#666",
             showscale=False,
             name="Grid",
-            customdata=np.stack([gdf["CELL_ID"], z_values], axis=1),
-            hovertemplate="CELL_ID=%{customdata[0]}<br>Flux=%{customdata[1]:.2f}<extra></extra>",
+            customdata=np.stack(
+                [
+                    gdf["CELL_ID"],
+                    z_values,
+                    gdf["GCD_Name"].fillna("Unknown").astype(str),
+                    gdf["PGMA_Name"].fillna("Unknown").astype(str),
+                ],
+                axis=1,
+            ),
+            hovertemplate=(
+                "CELL_ID=%{customdata[0]}<br>"
+                "Flux=%{customdata[1]:.2f}<br>"
+                "GCD=%{customdata[2]}<br>"
+                "PGMA=%{customdata[3]}<extra></extra>"
+            ),
         )
     )
     scatter_flux = [float(wel_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
-    scatter_log = _signed_log(scatter_flux)
-    if scatter_log:
-        scatter_min = min(scatter_log)
-        scatter_max = max(scatter_log)
-        if scatter_min < 0.0 and scatter_max > 0.0:
-            scatter_abs = max(abs(scatter_min), abs(scatter_max))
-            scatter_min, scatter_max = -scatter_abs, scatter_abs
-        elif scatter_max <= 0.0:
-            scatter_max = 0.0
-        elif scatter_min >= 0.0:
-            scatter_min = 0.0
-    else:
-        scatter_min, scatter_max = 0.0, 1.0
-    flux_nonzero = [v for v in scatter_flux if v != 0.0]
-    if flux_nonzero:
-        flux_min = min(flux_nonzero)
-        flux_max = max(flux_nonzero)
-        if flux_min < 0.0 and flux_max > 0.0:
-            flux_max_abs = max(abs(flux_min), abs(flux_max))
-            tick_values = [
-                -flux_max_abs,
-                -flux_max_abs / 10.0,
-                0.0,
-                flux_max_abs / 10.0,
-                flux_max_abs,
-            ]
-        elif flux_max <= 0.0:
-            tick_values = [flux_min, flux_min / 10.0, 0.0]
-        else:
-            tick_values = [0.0, flux_max / 10.0, flux_max]
-        tick_vals = [np.sign(v) * np.log10(1.0 + abs(v)) for v in tick_values]
-        tick_text = [f"{v:.0f}" for v in tick_values]
-    else:
-        tick_vals, tick_text = None, None
     fig.add_trace(
         go.Scattermap(
             lon=gdf["_lon"],
@@ -212,15 +555,15 @@ def build_plotly_selector(
             mode="markers",
             marker=dict(
                 size=6,
-                color=scatter_log,
+                color=scatter_flux,
                 colorscale=[(0.0, "#2b6cb0"), (0.5, "#ffffff"), (1.0, "#c53030")],
-                cmin=scatter_min,
-                cmax=scatter_max,
+                cmin=0.0,
+                cmax=1.0,
                 showscale=True,
                 colorbar=dict(
                     title="Flux",
-                    tickvals=tick_vals,
-                    ticktext=tick_text,
+                    tickvals=None,
+                    ticktext=None,
                     orientation="h",
                     x=0.5,
                     xanchor="center",
@@ -236,18 +579,34 @@ def build_plotly_selector(
                     gdf["ROW"],
                     gdf["COL"],
                     scatter_flux,
+                    gdf["GCD_Name"].fillna("Unknown").astype(str),
+                    gdf["PGMA_Name"].fillna("Unknown").astype(str),
                 ],
                 axis=1,
             ),
             hovertemplate=(
                 "CELL_ID=%{customdata[0]}<br>"
                 "ROW=%{customdata[1]} COL=%{customdata[2]}<br>"
-                "Flux=%{customdata[3]:.2f}<extra></extra>"
+                "Flux=%{customdata[3]:.2f}<br>"
+                "GCD=%{customdata[4]}<br>"
+                "PGMA=%{customdata[5]}<extra></extra>"
             ),
             selected=dict(marker=dict(size=8, color="#d62728")),
             unselected=dict(marker=dict(opacity=0.5)),
         )
     )
+    fig.add_trace(
+        go.Scattermap(
+            lon=[],
+            lat=[],
+            mode="markers",
+            marker=dict(size=10, color="#d62728"),
+            name="Selected",
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    _apply_color_mode(fig, gdf, wel_cells, "flux")
     fig.update_layout(
         height=600,
         margin=dict(l=0, r=0, t=0, b=0),
@@ -261,35 +620,43 @@ def build_plotly_selector(
     )
 
     selected_ids: set = set()
+    id_to_index = {int(cid): idx for idx, cid in enumerate(gdf["CELL_ID"])}
     status = widgets.Label(value="Selected cells: 0")
+    map_status = None
+
+    def _apply_selection(cell_ids: Iterable[int]) -> None:
+        selected_ids.clear()
+        selected_ids.update(int(cid) for cid in cell_ids)
+        selected_indices = [id_to_index[cid] for cid in selected_ids if cid in id_to_index]
+        fig.data[1].selectedpoints = selected_indices
+        selected_rows = gdf.iloc[selected_indices] if selected_indices else gdf.iloc[[]]
+        fig.data[2].update(lon=selected_rows["_lon"], lat=selected_rows["_lat"])
+        status.value = f"Selected cells: {len(selected_ids)}"
 
     def _update_selected_from_inds(point_inds):
-        selected_ids.clear()
-        for idx in point_inds:
-            cid = int(fig.data[1].customdata[idx][0])
-            selected_ids.add(cid)
-        status.value = f"Selected cells: {len(selected_ids)}"
+        _apply_selection(int(fig.data[1].customdata[idx][0]) for idx in point_inds)
 
     def _on_selection(trace, points, state):
         if hasattr(points, "point_inds") and points.point_inds:
             _update_selected_from_inds(points.point_inds)
         else:
-            _update_selected_from_inds([])
+            _apply_selection([])
 
     def _on_click(trace, points, state):
         if hasattr(points, "point_inds") and points.point_inds:
+            toggled = set(selected_ids)
             for idx in points.point_inds:
                 cid = int(fig.data[1].customdata[idx][0])
-                if cid in selected_ids:
-                    selected_ids.remove(cid)
+                if cid in toggled:
+                    toggled.remove(cid)
                 else:
-                    selected_ids.add(cid)
-            status.value = f"Selected cells: {len(selected_ids)}"
+                    toggled.add(cid)
+            _apply_selection(toggled)
 
     fig.data[1].on_selection(_on_selection)
     fig.data[1].on_click(_on_click)
 
-    return fig, status, selected_ids
+    return fig, status, map_status, selected_ids, _apply_selection
 
 
 def apply_rate_update(
@@ -336,7 +703,12 @@ def apply_rate_update(
     return len(selected_cells)
 
 
-def render_ui(wel: flopy.modflow.ModflowWel, gdf: gpd.GeoDataFrame) -> None:
+def build_ui(
+    wel: flopy.modflow.ModflowWel,
+    gdf: gpd.GeoDataFrame,
+    show_dataset_controls: bool = True,
+    rch: flopy.modflow.ModflowRch | None = None,
+) -> widgets.Widget:
     cell_id_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
 
     def _collect_wel_cells(row_offset: int, col_offset: int) -> Dict[int, float]:
@@ -360,7 +732,16 @@ def render_ui(wel: flopy.modflow.ModflowWel, gdf: gpd.GeoDataFrame) -> None:
     if use_offset:
         wel_cells = wel_cells_offset
 
-    fig, status, selected_ids = build_plotly_selector(gdf, wel_cells)
+    rch_cells: Dict[int, float] = {}
+    if rch is not None:
+        try:
+            rch_cells = build_rch_cells(rch, gdf)
+        except Exception:
+            rch_cells = {}
+
+    fig, status, map_status, selected_ids, apply_selection = build_plotly_selector(
+        gdf, wel_cells
+    )
     match_info = widgets.Label(
         value=(
             f"WEL/grid matches: {len(wel_cells)} cells"
@@ -383,11 +764,35 @@ def render_ui(wel: flopy.modflow.ModflowWel, gdf: gpd.GeoDataFrame) -> None:
         value="set",
         description="Rate mode",
     )
+    color_by = widgets.Dropdown(
+        options=[("Flux", "flux"), ("GCD_Name", "GCD_Name"), ("PGMA_Name", "PGMA_Name")],
+        value="flux",
+        description="Color by",
+    )
+    flux_source_options = [("WEL", "wel")]
+    if rch_cells:
+        flux_source_options.append(("RCH", "rch"))
+    flux_source = widgets.Dropdown(
+        options=flux_source_options,
+        value="wel",
+        description="Flux source",
+    )
+    category_select = widgets.Combobox(
+        options=[],
+        description="Category",
+        placeholder="Select a category",
+    )
+    select_category_btn = widgets.Button(description="Select category")
     rate_input = widgets.FloatText(value=-20.0, description="New rate")
     layer_input = widgets.IntText(value=1, description="Layer (k)")
     add_missing = widgets.Checkbox(value=False, description="Add missing wells")
     save_btn = widgets.Button(description="Apply + Save", button_style="primary")
     output = widgets.Output()
+    dataset_fetch_btn = widgets.Button(description="Fetch CKAN datasets")
+    dataset_dropdown = widgets.Dropdown(options=[], description="Dataset")
+    dataset_status = widgets.Label(value="CKAN datasets: not loaded")
+    dataset_details = widgets.HTML(value="")
+    dataset_lookup: Dict[str, Dict] = {}
 
     def _apply_and_save(_):
         with output:
@@ -409,15 +814,247 @@ def render_ui(wel: flopy.modflow.ModflowWel, gdf: gpd.GeoDataFrame) -> None:
 
     save_btn.on_click(_apply_and_save)
 
+    def _on_color_change(change):
+        if change.get("name") == "value":
+            active_cells = wel_cells if flux_source.value == "wel" else rch_cells
+            _apply_color_mode(fig, gdf, active_cells, change["new"])
+            if change["new"] == "flux":
+                category_select.options = []
+                category_select.value = ""
+                category_select.disabled = True
+                select_category_btn.disabled = True
+            else:
+                col = change["new"]
+                categories = (
+                    gdf[col].fillna("Unknown").astype(str).drop_duplicates().tolist()
+                )
+                category_select.options = categories
+                category_select.value = ""
+                category_select.disabled = False
+                select_category_btn.disabled = False
+
+    color_by.observe(_on_color_change, names="value")
+
+    def _on_flux_source_change(change):
+        if change.get("name") == "value":
+            active_cells = wel_cells if change["new"] == "wel" else rch_cells
+            flux_values = [float(active_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
+            _update_flux_customdata(fig, gdf, flux_values)
+            _apply_color_mode(fig, gdf, active_cells, color_by.value)
+
+    flux_source.observe(_on_flux_source_change, names="value")
+
+    def _update_dataset_details(name: str) -> None:
+        dataset = dataset_lookup.get(name)
+        if not dataset:
+            dataset_details.value = ""
+            return
+        def _fmt(res_list):
+            return "<br>".join(
+                [f"{res.get('name','(unnamed)')} - {res.get('url','')}" for res in res_list]
+            )
+        details = (
+            f"<b>WEL:</b><br>{_fmt(dataset['matches']['wel'])}<br>"
+            f"<b>GRID:</b><br>{_fmt(dataset['matches']['grid'])}<br>"
+            f"<b>RCH:</b><br>{_fmt(dataset['matches']['rch'])}"
+        )
+        dataset_details.value = details
+
+    def _fetch_ckan(_):
+        dataset_status.value = "CKAN datasets: loading..."
+        dataset_dropdown.options = []
+        dataset_lookup.clear()
+        try:
+            datasets = _search_ckan_datasets()
+        except Exception as exc:
+            dataset_status.value = f"CKAN datasets: error ({exc})"
+            return
+        options = [(d["title"], d["name"]) for d in datasets]
+        dataset_dropdown.options = options
+        dataset_status.value = f"CKAN datasets: {len(options)} found"
+        for d in datasets:
+            dataset_lookup[d["name"]] = d
+        if options:
+            dataset_dropdown.value = options[0][1]
+            _update_dataset_details(options[0][1])
+
+    dataset_fetch_btn.on_click(_fetch_ckan)
+
+    def _on_dataset_change(change):
+        if change.get("name") == "value":
+            _update_dataset_details(change["new"])
+
+    dataset_dropdown.observe(_on_dataset_change, names="value")
+
+    def _select_by_category(_):
+        mode = color_by.value
+        if mode == "flux":
+            return
+        target = (category_select.value or "").strip()
+        if not target:
+            return
+        col = mode
+        series = gdf[col].fillna("Unknown").astype(str).str.strip()
+        options = [str(opt).strip() for opt in category_select.options]
+        options_map = {opt.lower(): opt for opt in options if opt}
+        target_key = target.lower()
+        if target_key in options_map:
+            target = options_map[target_key]
+            category_select.value = target
+        else:
+            # Fallback to case-insensitive match against data.
+            matches = series.str.lower() == target_key
+            cell_ids = gdf.loc[matches, "CELL_ID"].tolist()
+            apply_selection(cell_ids)
+            return
+        matches = series == target
+        cell_ids = gdf.loc[matches, "CELL_ID"].tolist()
+        apply_selection(cell_ids)
+
+    select_category_btn.on_click(_select_by_category)
+
+    _on_color_change({"name": "value", "new": color_by.value})
+    _on_flux_source_change({"name": "value", "new": flux_source.value})
+
+    controls = widgets.VBox(
+        [
+            match_info,
+            flux_source,
+            color_by,
+            category_select,
+            select_category_btn,
+            rate_mode,
+            rate_input,
+            layer_input,
+            add_missing,
+            save_btn,
+            status,
+            output,
+        ],
+        layout=widgets.Layout(width="320px"),
+    )
+    top_widgets: List[widgets.Widget] = []
+    if show_dataset_controls:
+        top_widgets.append(
+            widgets.VBox(
+                [
+                    widgets.HBox([dataset_fetch_btn, dataset_dropdown]),
+                    dataset_status,
+                    dataset_details,
+                ]
+            )
+        )
+    return widgets.VBox(
+        [
+            *top_widgets,
+            widgets.HBox([controls, fig]),
+            help_text,
+        ]
+    )
+
+
+def render_ui(
+    wel: flopy.modflow.ModflowWel,
+    gdf: gpd.GeoDataFrame,
+    show_dataset_controls: bool = True,
+    rch: flopy.modflow.ModflowRch | None = None,
+) -> None:
+    display(build_ui(wel, gdf, show_dataset_controls=show_dataset_controls, rch=rch))
+
+
+def render_ui_from_ckan(data_dir: Path = Path("ckan_data")) -> None:
+    dataset_dropdown = widgets.Dropdown(options=[], description="Dataset")
+    dataset_status = widgets.Label(value="CKAN datasets: not loaded")
+    dataset_details = widgets.HTML(value="")
+    dataset_lookup: Dict[str, Dict] = {}
+    load_btn = widgets.Button(description="Load dataset", button_style="primary")
+    output = widgets.Output()
+
+    def _update_dataset_details(name: str) -> None:
+        dataset = dataset_lookup.get(name)
+        if not dataset:
+            dataset_details.value = ""
+            return
+
+        def _fmt(res_list):
+            return "<br>".join(
+                [f"{res.get('name','(unnamed)')} - {res.get('url','')}" for res in res_list]
+            )
+
+        details = (
+            f"<b>WEL:</b><br>{_fmt(dataset['matches']['wel'])}<br>"
+            f"<b>GRID:</b><br>{_fmt(dataset['matches']['grid'])}<br>"
+            f"<b>RCH:</b><br>{_fmt(dataset['matches']['rch'])}"
+        )
+        dataset_details.value = details
+
+    def _fetch_ckan(_):
+        dataset_status.value = "CKAN datasets: loading..."
+        dataset_dropdown.options = []
+        dataset_lookup.clear()
+        try:
+            datasets = _search_ckan_datasets()
+        except Exception as exc:
+            dataset_status.value = f"CKAN datasets: error ({exc})"
+            return
+        options = [(d["title"], d["name"]) for d in datasets]
+        dataset_dropdown.options = options
+        dataset_status.value = f"CKAN datasets: {len(options)} found"
+        for d in datasets:
+            dataset_lookup[d["name"]] = d
+        if options:
+            dataset_dropdown.value = options[0][1]
+            _update_dataset_details(options[0][1])
+
+    def _on_dataset_change(change):
+        if change.get("name") == "value":
+            _update_dataset_details(change["new"])
+
+    dataset_dropdown.observe(_on_dataset_change, names="value")
+
+    def _load_selected(_):
+        name = dataset_dropdown.value
+        if not name:
+            return
+        dataset = dataset_lookup.get(name)
+        if not dataset:
+            return
+        with output:
+            clear_output()
+            try:
+                base_dir = data_dir / name
+                wel_resource = dataset["matches"]["wel"][0]
+                grid_resource = dataset["matches"]["grid"][0]
+                rch_resource = dataset["matches"]["rch"][0]
+                wel_path = _download_ckan_resource(wel_resource, base_dir / "wel")
+                rch_path = _download_ckan_resource(rch_resource, base_dir / "rch")
+                gdf = _load_grid_resource(grid_resource, base_dir / "grid")
+                wel = load_wel(wel_path)
+                nrow = int(gdf["ROW"].max())
+                ncol = int(gdf["COL"].max())
+                try:
+                    rch = load_rch(rch_path, nrow=nrow, ncol=ncol, nper=wel.nper)
+                except Exception:
+                    rch = None
+                ui = build_ui(wel, gdf, show_dataset_controls=False, rch=rch)
+                display(ui)
+            except Exception as exc:
+                print(f"Failed to load dataset: {exc}")
+
+    load_btn.on_click(_load_selected)
+
     display(
         widgets.VBox(
             [
-                fig,
-                help_text,
-                match_info,
-                widgets.HBox([rate_mode, rate_input, layer_input, add_missing, save_btn]),
-                status,
+                widgets.VBox(
+                    [
+                        widgets.HBox([dataset_dropdown, load_btn]),
+                        dataset_status,
+                        dataset_details,
+                    ]
+                ),
                 output,
             ]
         )
     )
+    _fetch_ckan(None)
