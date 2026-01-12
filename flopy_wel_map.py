@@ -50,7 +50,8 @@ def ensure_ebfz_grid(grid_dir: Path) -> Path:
     from urllib.request import urlretrieve
 
     grid_zip = grid_dir.with_suffix(".zip")
-    urlretrieve(url, grid_zip)
+    if not grid_zip.exists():
+        urlretrieve(url, grid_zip)
     grid_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(grid_zip, "r") as zf:
         zf.extractall(grid_dir)
@@ -120,36 +121,129 @@ def load_grid_gdf(grid_gdb: Path, layer_name: str) -> gpd.GeoDataFrame:
     return gdf
 
 
-def build_plotly_selector(gdf: gpd.GeoDataFrame) -> Tuple[go.FigureWidget, widgets.Label, set]:
+def build_plotly_selector(
+    gdf: gpd.GeoDataFrame, wel_cells: Dict[int, float] | None = None
+) -> Tuple[go.FigureWidget, widgets.Label, set]:
     gdf_map = gdf[["CELL_ID", "ROW", "COL", "geometry"]].copy()
     grid_geojson = gdf_map.set_index("CELL_ID").__geo_interface__
     center_lat = float(gdf["_lat"].median())
     center_lon = float(gdf["_lon"].median())
 
     fig = go.FigureWidget()
+    wel_cells = wel_cells or {}
+
+    def _signed_log(values: List[float]) -> List[float]:
+        return [np.sign(v) * np.log10(1.0 + abs(v)) for v in values]
+
+    z_values = [float(wel_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
+    z_log = _signed_log(z_values)
+    if z_log:
+        zmin = min(z_log)
+        zmax = max(z_log)
+        if zmin < 0.0 and zmax > 0.0:
+            max_abs = max(abs(zmin), abs(zmax))
+            zmin, zmax = -max_abs, max_abs
+        elif zmax <= 0.0:
+            zmax = 0.0
+        elif zmin >= 0.0:
+            zmin = 0.0
+    else:
+        zmin, zmax = 0.0, 1.0
     fig.add_trace(
         go.Choroplethmap(
             geojson=grid_geojson,
             locations=gdf["CELL_ID"],
-            z=[1] * len(gdf),
-            colorscale=["#e0e0e0", "#e0e0e0"],
+            z=z_log,
+            zmin=zmin,
+            zmax=zmax,
+            colorscale=[
+                (0.0, "#2b6cb0"),
+                (0.5, "#ffffff"),
+                (1.0, "#c53030"),
+            ],
             marker_opacity=0.35,
             marker_line_width=0.5,
             marker_line_color="#666",
             showscale=False,
             name="Grid",
-            hoverinfo="skip",
+            customdata=np.stack([gdf["CELL_ID"], z_values], axis=1),
+            hovertemplate="CELL_ID=%{customdata[0]}<br>Flux=%{customdata[1]:.2f}<extra></extra>",
         )
     )
+    scatter_flux = [float(wel_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
+    scatter_log = _signed_log(scatter_flux)
+    if scatter_log:
+        scatter_min = min(scatter_log)
+        scatter_max = max(scatter_log)
+        if scatter_min < 0.0 and scatter_max > 0.0:
+            scatter_abs = max(abs(scatter_min), abs(scatter_max))
+            scatter_min, scatter_max = -scatter_abs, scatter_abs
+        elif scatter_max <= 0.0:
+            scatter_max = 0.0
+        elif scatter_min >= 0.0:
+            scatter_min = 0.0
+    else:
+        scatter_min, scatter_max = 0.0, 1.0
+    flux_nonzero = [v for v in scatter_flux if v != 0.0]
+    if flux_nonzero:
+        flux_min = min(flux_nonzero)
+        flux_max = max(flux_nonzero)
+        if flux_min < 0.0 and flux_max > 0.0:
+            flux_max_abs = max(abs(flux_min), abs(flux_max))
+            tick_values = [
+                -flux_max_abs,
+                -flux_max_abs / 10.0,
+                0.0,
+                flux_max_abs / 10.0,
+                flux_max_abs,
+            ]
+        elif flux_max <= 0.0:
+            tick_values = [flux_min, flux_min / 10.0, 0.0]
+        else:
+            tick_values = [0.0, flux_max / 10.0, flux_max]
+        tick_vals = [np.sign(v) * np.log10(1.0 + abs(v)) for v in tick_values]
+        tick_text = [f"{v:.0f}" for v in tick_values]
+    else:
+        tick_vals, tick_text = None, None
     fig.add_trace(
         go.Scattermap(
             lon=gdf["_lon"],
             lat=gdf["_lat"],
             mode="markers",
-            marker=dict(size=6, color="#1f77b4"),
+            marker=dict(
+                size=6,
+                color=scatter_log,
+                colorscale=[(0.0, "#2b6cb0"), (0.5, "#ffffff"), (1.0, "#c53030")],
+                cmin=scatter_min,
+                cmax=scatter_max,
+                showscale=True,
+                colorbar=dict(
+                    title="Flux",
+                    tickvals=tick_vals,
+                    ticktext=tick_text,
+                    orientation="h",
+                    x=0.5,
+                    xanchor="center",
+                    y=-0.15,
+                    yanchor="top",
+                    len=0.7,
+                ),
+            ),
             name="Cells",
-            customdata=np.stack([gdf["CELL_ID"], gdf["ROW"], gdf["COL"]], axis=1),
-            hovertemplate="CELL_ID=%{customdata[0]}<br>ROW=%{customdata[1]} COL=%{customdata[2]}<extra></extra>",
+            customdata=np.stack(
+                [
+                    gdf["CELL_ID"],
+                    gdf["ROW"],
+                    gdf["COL"],
+                    scatter_flux,
+                ],
+                axis=1,
+            ),
+            hovertemplate=(
+                "CELL_ID=%{customdata[0]}<br>"
+                "ROW=%{customdata[1]} COL=%{customdata[2]}<br>"
+                "Flux=%{customdata[3]:.2f}<extra></extra>"
+            ),
             selected=dict(marker=dict(size=8, color="#d62728")),
             unselected=dict(marker=dict(opacity=0.5)),
         )
@@ -243,7 +337,36 @@ def apply_rate_update(
 
 
 def render_ui(wel: flopy.modflow.ModflowWel, gdf: gpd.GeoDataFrame) -> None:
-    fig, status, selected_ids = build_plotly_selector(gdf)
+    cell_id_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
+
+    def _collect_wel_cells(row_offset: int, col_offset: int) -> Dict[int, float]:
+        cells: Dict[int, float] = {}
+        for recs in wel.stress_period_data.data.values():
+            for rec in recs:
+                row = int(rec["i"]) + row_offset
+                col = int(rec["j"]) + col_offset
+                cell_id = cell_id_lookup.get((row, col))
+                if cell_id is None:
+                    continue
+                flux = float(rec["flux"])
+                cell_key = int(cell_id)
+                if cell_key not in cells or abs(flux) > abs(cells[cell_key]):
+                    cells[cell_key] = flux
+        return cells
+
+    wel_cells = _collect_wel_cells(0, 0)
+    wel_cells_offset = _collect_wel_cells(1, 1)
+    use_offset = len(wel_cells_offset) > len(wel_cells)
+    if use_offset:
+        wel_cells = wel_cells_offset
+
+    fig, status, selected_ids = build_plotly_selector(gdf, wel_cells)
+    match_info = widgets.Label(
+        value=(
+            f"WEL/grid matches: {len(wel_cells)} cells"
+            + (" (using +1 row/col offset)" if use_offset else "")
+        )
+    )
 
     help_text = widgets.HTML(
         """
@@ -291,6 +414,7 @@ def render_ui(wel: flopy.modflow.ModflowWel, gdf: gpd.GeoDataFrame) -> None:
             [
                 fig,
                 help_text,
+                match_info,
                 widgets.HBox([rate_mode, rate_input, layer_input, add_missing, save_btn]),
                 status,
                 output,
