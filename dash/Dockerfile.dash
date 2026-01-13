@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gdal-bin \
+    libgdal-dev \
+    libgeos-dev \
+    libproj-dev \
+    libspatialindex-dev \
+    proj-bin \
+    proj-data \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app/dash
+
+COPY dash/requirements-dash.txt /app/dash/requirements-dash.txt
+RUN pip install --no-cache-dir -r /app/dash/requirements-dash.txt
+
+COPY dash/ /app/dash
+COPY flopy_wel_map.py /app/dash/
+
+EXPOSE 8050
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8050", "dash_app:server"]

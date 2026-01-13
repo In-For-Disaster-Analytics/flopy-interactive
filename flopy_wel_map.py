@@ -395,7 +395,6 @@ def _map_rch_cells(
         if arr.ndim == 3:
             normalized.extend([arr[idx] for idx in range(arr.shape[0])])
             continue
-        print(f"[rch_map] skipping array with shape {arr.shape}")
 
     def _collect(offset: int, swap: bool) -> Dict[int, float]:
         cells: Dict[int, float] = {}
@@ -422,24 +421,11 @@ def _map_rch_cells(
         _collect(0, True),
         _collect(-1, True),
     ]
-    best = max(candidates, key=lambda c: sum(1 for v in c.values() if v != 0.0))
-    nonzero = [v for v in best.values() if v != 0.0]
-    if best:
-        print(
-            "[rch_map] cells="
-            f"{len(best)} nonzero={len(nonzero)} "
-            f"min={min(best.values()):.6g} max={max(best.values()):.6g}"
-        )
-    else:
-        print("[rch_map] cells=0 nonzero=0")
-    return best
+    return max(candidates, key=lambda c: sum(1 for v in c.values() if v != 0.0))
 
 
 def build_rch_cells(rch, gdf: gpd.GeoDataFrame) -> Dict[int, float]:
-    print(f"[rch_build] start: rows={gdf['ROW'].min()}-{gdf['ROW'].max()} cols={gdf['COL'].min()}-{gdf['COL'].max()}")
     arrays = _rch_to_arrays(rch)
-    shapes = [arr.shape for arr in arrays]
-    print(f"[rch_build] arrays={len(arrays)} shapes={shapes}")
     return _map_rch_cells(arrays, gdf)
 
 
@@ -448,10 +434,7 @@ def build_rch_cells_for_periods(
     gdf: gpd.GeoDataFrame,
     periods: Sequence[int],
 ) -> Dict[int, float]:
-    print(f"[rch_build_periods] periods={list(periods)}")
     arrays = _rch_to_arrays(rch)
-    shapes = [arr.shape for arr in arrays]
-    print(f"[rch_build_periods] arrays={len(arrays)} shapes={shapes}")
     if periods:
         selected = [arrays[p] for p in periods if 0 <= p < len(arrays)]
         if not selected:
@@ -530,18 +513,6 @@ def _signed_range(values: Sequence[float]) -> Tuple[float, float]:
     return 0.0, vmax
 
 
-def _debug_cell_stats(label: str, cells: Dict[int, float]) -> None:
-    if not cells:
-        print(f"[cells] {label}: empty")
-        return
-    values = list(cells.values())
-    nonzero = sum(1 for v in values if v != 0.0)
-    print(
-        f"[cells] {label}: count={len(values)} nonzero={nonzero} "
-        f"min={min(values):.6g} max={max(values):.6g}"
-    )
-
-
 def _discrete_colorscale(colors: Sequence[str], count: int) -> List[Tuple[float, str]]:
     if count <= 1:
         return [(0.0, colors[0]), (1.0, colors[0])]
@@ -568,18 +539,8 @@ def _apply_color_mode(
     diverging = [(0.0, "#2b6cb0"), (0.5, "#ffffff"), (1.0, "#c53030")]
 
     if mode == "flux":
-        print(
-            f"[color_mode] mode=flux label={flux_label} "
-            f"force_linear={force_linear} normalize={normalize}"
-        )
         nonzero = [v for v in flux_values if v != 0.0]
         all_nonnegative = bool(nonzero) and min(flux_values) >= 0.0
-        if flux_values:
-            print(
-                "[color_mode] flux_values: "
-                f"min={min(flux_values):.6g} max={max(flux_values):.6g} "
-                f"nonzero={len(nonzero)}"
-            )
         if (force_linear or normalize or all_nonnegative) and nonzero:
             fmin = min(flux_values)
             fmax = max(flux_values)
@@ -592,10 +553,6 @@ def _apply_color_mode(
             tick_vals = tick_values
             tick_text = [f"{v:.6g}" for v in tick_values]
             title = flux_label
-            print(
-                f"[color_mode] linear branch: zmin={zmin:.6g} zmax={zmax:.6g} "
-                f"ticks={tick_values}"
-            )
         else:
             z_vals = _signed_log(flux_values)
             zmin, zmax = _signed_range(z_vals)
@@ -620,10 +577,6 @@ def _apply_color_mode(
             else:
                 tick_vals, tick_text = None, None
             title = flux_label
-            print(
-                f"[color_mode] signed-log branch: zmin={zmin:.6g} zmax={zmax:.6g} "
-                f"ticks={tick_vals}"
-            )
 
         with fig.batch_update():
             fig.data[0].update(z=z_vals, zmin=zmin, zmax=zmax, colorscale=diverging)
@@ -929,12 +882,7 @@ def build_ui(
     if rch is not None:
         try:
             rch_cells = build_rch_cells(rch, gdf)
-            print(
-                "[rch_init] cells="
-                f"{len(rch_cells)} nonzero={sum(1 for v in rch_cells.values() if v != 0.0)}"
-            )
         except Exception as exc:
-            print(f"[rch_init] failed: {exc}")
             rch_cells = {}
 
     fig, status, map_status, selected_ids, apply_selection = build_plotly_selector(
@@ -1093,8 +1041,6 @@ def build_ui(
             active_cells = wel_cells if change["new"] == "wel" else rch_cells
             flux_values = [float(active_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
             label = "Well" if change["new"] == "wel" else "Recharge"
-            print(f"Flux source set to {label}; force_linear={change['new'] == 'rch'}")
-            _debug_cell_stats(f"active_cells ({label})", active_cells)
             _update_flux_customdata(fig, gdf, flux_values)
             _apply_color_mode(
                 fig,
@@ -1131,20 +1077,12 @@ def build_ui(
         if rch is not None:
             try:
                 rch_cells = build_rch_cells_for_periods(rch, gdf, active_periods)
-                print(
-                    "[rch_refresh] periods="
-                    f"{active_periods} cells={len(rch_cells)} "
-                    f"nonzero={sum(1 for v in rch_cells.values() if v != 0.0)}"
-                )
             except Exception as exc:
-                print(f"[rch_refresh] failed: {exc}")
                 rch_cells = {}
         match_info.value = (
             f"WEL/grid matches: {len(wel_cells)} cells"
             + (" (using +1 row/col offset)" if use_offset else "")
         )
-        _debug_cell_stats("wel_cells", wel_cells)
-        _debug_cell_stats("rch_cells", rch_cells)
         active_cells = wel_cells if flux_source.value == "wel" else rch_cells
         flux_values = [float(active_cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
         label = "Well" if flux_source.value == "wel" else "Recharge"

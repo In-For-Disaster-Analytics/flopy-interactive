@@ -1,5 +1,31 @@
 This template is the first in a [series of tutorials](#next-tutorials) that will guide you through the process of creating a cookbook and running it on TACC systems. From simple ones that run a command to more complex ones that run a Python using conda or a Jupyter Notebook.
 
+## Dash dashboard
+
+This repo includes a Plotly Dash dashboard for WEL/RCH visualization and updates. It loads datasets from CKAN on startup.
+
+### Run locally
+
+```bash
+python3 dash/dash_app.py
+```
+
+### Docker (production)
+
+```bash
+docker build -f dash/Dockerfile.dash -t flopy-dash .
+docker run -p 8050:8050 flopy-dash
+```
+
+Environment variables:
+
+- `FLOPY_DATA_DIR`: directory for CKAN downloads (default: `ckan_data`)
+- `FLOPY_OUTPUT_WEL`: output WEL file path (default: `barton_springs_updated.wel`)
+- `FLOPY_CKAN_URL`: CKAN base URL (default: `https://ckan.tacc.utexas.edu`)
+- `FLOPY_CKAN_JWT`: CKAN JWT token (optional, overrides Tapis login)
+- `FLOPY_TAPIS_USERNAME`: Tapis username (used to mint CKAN JWT)
+- `FLOPY_TAPIS_PASSWORD`: Tapis password (used to mint CKAN JWT)
+
 ## Requirements
 
 - A GitHub account
