@@ -4,6 +4,18 @@ This template is the first in a [series of tutorials](#next-tutorials) that will
 
 This repo includes a Plotly Dash dashboard for WEL/RCH visualization and updates. It loads datasets from CKAN on startup.
 
+### Code organization
+
+Shared logic now lives in the `flopy_interactive/` package (CKAN search, data loaders, and visualization helpers). The Dash app in `dash/` imports from this package, and `flopy_wel_map.py` remains as a compatibility wrapper for notebooks.
+
+### Dataset discovery
+
+Datasets appear in the Dash dropdown only if CKAN resources advertise these standard variables:
+
+- WEL: `groundwater_well__recharge_volume_flux`
+- RCH: `groundwater__recharge_volume_flux`
+- Grid: `Modflow-Spatially-Distributed-Grid`
+
 ### Run locally
 
 ```bash

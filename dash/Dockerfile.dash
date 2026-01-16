@@ -21,6 +21,7 @@ COPY dash/requirements-dash.txt /app/dash/requirements-dash.txt
 RUN pip install --no-cache-dir -r /app/dash/requirements-dash.txt
 
 COPY dash/ /app/dash
+COPY flopy_interactive/ /app/dash/flopy_interactive/
 COPY flopy_wel_map.py /app/dash/
 
 EXPOSE 8050

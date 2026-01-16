@@ -6,7 +6,6 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-from functools import lru_cache
 from pathlib import Path
 import re
 from typing import Dict, Iterable, List, Sequence
@@ -20,22 +19,40 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-import flopy_wel_map as fwm
 import ckan_publish as ckanp
+from flopy_interactive.ckankit.search import resource_has_standard_var, search_ckan_datasets
+from flopy_interactive.data.download import download_ckan_resource
+from flopy_interactive.data.grid import load_grid_resource
+from flopy_interactive.data.rch import build_rch_cells_for_periods, load_rch
+from flopy_interactive.data.wel import apply_rate_update, collect_wel_cells_for_period_data, load_wel
+from flopy_interactive.viz.color_modes import apply_color_mode
 
 
 DATA_DIR = Path(os.environ.get("FLOPY_DATA_DIR", "ckan_data"))
 OUTPUT_WEL = Path(os.environ.get("FLOPY_OUTPUT_WEL", "barton_springs_updated.wel"))
 
 
-@lru_cache(maxsize=1)
 def get_datasets() -> List[Dict]:
-    """Fetch CKAN datasets cached for the app session."""
-    return fwm._search_ckan_datasets()
+    """Fetch CKAN datasets for the app session.
+
+    Args:
+        None.
+
+    Returns:
+        List of dataset metadata dicts.
+    """
+    return search_ckan_datasets()
 
 
 def _get_dataset_or_none(name: str | None) -> Dict | None:
-    """Return dataset metadata matching a name, if present."""
+    """Return dataset metadata matching a name, if present.
+
+    Args:
+        name: Dataset name string.
+
+    Returns:
+        Dataset metadata dict or None.
+    """
     if not name:
         return None
     datasets = get_datasets()
@@ -45,9 +62,15 @@ def _get_dataset_or_none(name: str | None) -> Dict | None:
     return None
 
 
-@lru_cache(maxsize=8)
 def load_dataset(name: str) -> Dict:
-    """Download CKAN resources and assemble WEL/RCH/grid inputs."""
+    """Download CKAN resources and assemble WEL/RCH/grid inputs.
+
+    Args:
+        name: CKAN dataset name.
+
+    Returns:
+        Dict with dataset, gdf, wel, rch, lookup, and nlay.
+    """
     dataset = _get_dataset_or_none(name)
     if not dataset:
         raise ValueError(f"Dataset not found: {name}")
@@ -55,10 +78,10 @@ def load_dataset(name: str) -> Dict:
     wel_resource = dataset["matches"]["wel"][0]
     grid_resource = dataset["matches"]["grid"][0]
     rch_resource = dataset["matches"]["rch"][0]
-    wel_path = fwm._download_ckan_resource(wel_resource, base_dir / "wel")
-    rch_path = fwm._download_ckan_resource(rch_resource, base_dir / "rch")
-    gdf = fwm._load_grid_resource(grid_resource, base_dir / "grid")
-    wel = fwm.load_wel(wel_path)
+    wel_path = download_ckan_resource(wel_resource, base_dir / "wel")
+    rch_path = download_ckan_resource(rch_resource, base_dir / "rch")
+    gdf = load_grid_resource(grid_resource, base_dir / "grid")
+    wel = load_wel(wel_path)
     nrow = int(gdf["ROW"].max())
     ncol = int(gdf["COL"].max())
     try:
@@ -68,7 +91,7 @@ def load_dataset(name: str) -> Dict:
             keys = list(spd.data.keys())
             if keys:
                 nper = int(max(keys)) + 1
-        rch = fwm.load_rch(rch_path, nrow=nrow, ncol=ncol, nper=nper)
+        rch = load_rch(rch_path, nrow=nrow, ncol=ncol, nper=nper)
     except Exception:
         rch = None
     cell_id_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
@@ -92,7 +115,16 @@ def load_dataset(name: str) -> Dict:
 def _collect_wel_cells_for_periods(
     wel, gdf, periods: Sequence[int]
 ) -> Dict[int, float]:
-    """Aggregate WEL flux by cell across selected periods."""
+    """Aggregate WEL flux by cell across selected periods.
+
+    Args:
+        wel: FloPy WEL package.
+        gdf: GeoDataFrame with ROW/COL/CELL_ID columns.
+        periods: Stress period indices to include.
+
+    Returns:
+        Mapping of CELL_ID to flux value.
+    """
     cell_id_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
     if not periods:
         spd = getattr(wel, "stress_period_data", None)
@@ -101,7 +133,7 @@ def _collect_wel_cells_for_periods(
     def _merge_periods(row_offset: int, col_offset: int) -> Dict[int, float]:
         cells: Dict[int, float] = {}
         for period in periods:
-            period_cells = fwm._collect_wel_cells_for_period_data(
+            period_cells = collect_wel_cells_for_period_data(
                 wel, cell_id_lookup, int(period), row_offset, col_offset
             )
             for cid, flux in period_cells.items():
@@ -126,7 +158,19 @@ def _build_map_figure(
     force_linear: bool,
     selected_ids: Iterable[int],
 ) -> go.Figure:
-    """Build the Plotly map figure with grid and selection overlays."""
+    """Build the Plotly map figure with grid and selection overlays.
+
+    Args:
+        gdf: GeoDataFrame with grid metadata.
+        cells: Mapping of CELL_ID to flux values.
+        flux_label: Label for the colorbar.
+        color_by: ``flux`` or category column name.
+        force_linear: Whether to force linear scaling.
+        selected_ids: Iterable of selected CELL_ID values.
+
+    Returns:
+        Plotly Figure for the map.
+    """
     gdf_map = gdf[["CELL_ID", "ROW", "COL", "geometry"]].copy()
     grid_geojson = gdf_map.set_index("CELL_ID").__geo_interface__
     center_lat = float(gdf["_lat"].median())
@@ -221,7 +265,7 @@ def _build_map_figure(
         )
     )
 
-    fwm._apply_color_mode(
+    apply_color_mode(
         fig,
         gdf,
         cells,
@@ -251,7 +295,14 @@ def _build_map_figure(
 
 
 def _dataset_options() -> List[Dict[str, str]]:
-    """Build dataset dropdown options from CKAN search."""
+    """Build dataset dropdown options from CKAN search.
+
+    Args:
+        None.
+
+    Returns:
+        List of dicts with ``label`` and ``value`` keys.
+    """
     try:
         datasets = get_datasets()
     except Exception:
@@ -260,7 +311,15 @@ def _dataset_options() -> List[Dict[str, str]]:
 
 
 def _owned_gam_datasets(username: str, jwt_token: str) -> List[Dict[str, str]]:
-    """List datasets owned by a user for suggestion dropdowns."""
+    """List datasets owned by a user for suggestion dropdowns.
+
+    Args:
+        username: Tapis username or email.
+        jwt_token: CKAN JWT token.
+
+    Returns:
+        List of dicts with ``label`` and ``value`` keys.
+    """
     if not username or not jwt_token:
         return []
     options: List[Dict[str, str]] = []
@@ -280,7 +339,14 @@ def _owned_gam_datasets(username: str, jwt_token: str) -> List[Dict[str, str]]:
     return options
 
 def _slugify(value: str) -> str:
-    """Normalize a string for use in dataset naming."""
+    """Normalize a string for use in dataset naming.
+
+    Args:
+        value: Input string to normalize.
+
+    Returns:
+        Slugified string.
+    """
     value = value.strip().lower().replace(" ", "-")
     value = re.sub(r"[^a-z0-9\-_.]", "-", value)
     value = re.sub(r"-{2,}", "-", value)
@@ -491,7 +557,14 @@ app.layout = html.Div(
     Input("loaded-dataset", "data"),
 )
 def update_dataset_controls(loaded_dataset: str | None):
-    """Populate stress period and layer controls for the dataset."""
+    """Populate stress period and layer controls for the dataset.
+
+    Args:
+        loaded_dataset: CKAN dataset name or None.
+
+    Returns:
+        Tuple of (period options, layer options).
+    """
     if not loaded_dataset:
         return [], []
     data = load_dataset(loaded_dataset)
@@ -514,7 +587,16 @@ def update_dataset_controls(loaded_dataset: str | None):
     prevent_initial_call=False,
 )
 def load_selected_dataset(n_clicks, selected_dataset, load_counter):
-    """Load dataset resources and update load state messages."""
+    """Load dataset resources and update load state messages.
+
+    Args:
+        n_clicks: Click count from the load button.
+        selected_dataset: Selected dataset name.
+        load_counter: Current load counter value.
+
+    Returns:
+        Tuple of (loaded dataset, status message, updated counter).
+    """
     if not selected_dataset:
         return None, "No dataset selected.", load_counter
     try:
@@ -538,7 +620,20 @@ def load_selected_dataset(n_clicks, selected_dataset, load_counter):
 def update_periods_layers(
     loaded_dataset, select_periods_clicks, select_layers_clicks, period_options, layer_options
 ):
-    """Handle select-all interactions for periods and layers."""
+    """Handle select-all interactions for periods and layers.
+
+    Args:
+        loaded_dataset: CKAN dataset name or None.
+        select_periods_clicks: Click count for select-all periods.
+        select_layers_clicks: Click count for select-all layers.
+        period_options: Existing period option list.
+        layer_options: Existing layer option list.
+
+    Returns:
+        Tuple of (period values, layer values).
+    """
+    if not loaded_dataset:
+        raise dash.exceptions.PreventUpdate
     triggered = ctx.triggered_id
     if triggered == "select-all-periods":
         period_values = [opt["value"] for opt in (period_options or [])]
@@ -580,7 +675,16 @@ def update_periods_layers(
     prevent_initial_call=True,
 )
 def login_ckan(n_clicks, username, password):
-    """Authenticate with Tapis and store the CKAN JWT."""
+    """Authenticate with Tapis and store the CKAN JWT.
+
+    Args:
+        n_clicks: Click count from the login button.
+        username: Tapis username string.
+        password: Tapis password string.
+
+    Returns:
+        Tuple of (jwt token, status text, status class, username, disable flags, button label).
+    """
     if not n_clicks:
         raise dash.exceptions.PreventUpdate
     if not username or not password:
@@ -601,7 +705,15 @@ def login_ckan(n_clicks, username, password):
     Input("loaded-dataset", "data"),
 )
 def update_category_controls(color_by, loaded_dataset):
-    """Show or hide category selection controls by color mode."""
+    """Show or hide category selection controls by color mode.
+
+    Args:
+        color_by: Current color-by mode.
+        loaded_dataset: CKAN dataset name or None.
+
+    Returns:
+        Tuple of (options, value, style, disabled flag).
+    """
     if not loaded_dataset or color_by == "flux":
         return [], None, {"display": "none"}, True
     data = load_dataset(loaded_dataset)
@@ -621,7 +733,15 @@ def update_category_controls(color_by, loaded_dataset):
     Input("ckan-jwt", "data"),
 )
 def update_dataset_suggestions(username, jwt_token):
-    """Return dataset suggestions owned by the logged-in user."""
+    """Return dataset suggestions owned by the logged-in user.
+
+    Args:
+        username: Tapis username or email.
+        jwt_token: CKAN JWT token.
+
+    Returns:
+        List of dataset suggestion dicts.
+    """
     return _owned_gam_datasets(username or "", jwt_token or "")
 
 
@@ -667,7 +787,30 @@ def suggest_names(
     current_source_url,
     current_change_summary,
 ):
-    """Generate dataset/output names and change summary from UI state."""
+    """Generate dataset/output names and change summary from UI state.
+
+    Args:
+        loaded_dataset: CKAN dataset name or None.
+        flux_source: ``wel`` or ``rch``.
+        rate_mode: ``set`` or ``scale_percent``.
+        new_rate: New rate value.
+        suggested_name: Suggested dataset name selection.
+        jwt_token: CKAN JWT token.
+        color_by: Color-by mode.
+        category_value: Selected category value.
+        periods: Selected stress periods.
+        layers: Selected layers.
+        add_missing: Checkbox values for add-missing.
+        selected_ids: Selected CELL_ID values.
+        name_seed: Stable name seed string.
+        current_dataset_name: Current dataset name input.
+        current_output_name: Current output filename input.
+        current_source_url: Current source URL input.
+        current_change_summary: Current change summary input.
+
+    Returns:
+        Tuple of (dataset name, output filename, source URL, change summary).
+    """
     if not loaded_dataset:
         return current_dataset_name, current_output_name, current_source_url, current_change_summary
     if suggested_name:
@@ -696,7 +839,7 @@ def suggest_names(
             if not source_url:
                 resources = details.get("resources", [])
                 wel_res = next(
-                    (res for res in resources if fwm._resource_has_standard_var(res, ckanp.WEL_STANDARD_VAR)),
+                    (res for res in resources if resource_has_standard_var(res, ckanp.WEL_STANDARD_VAR)),
                     None,
                 )
                 if wel_res:
@@ -739,7 +882,21 @@ def update_selection(
     color_by,
     category_value,
 ):
-    """Update selected cell IDs based on map interactions."""
+    """Update selected cell IDs based on map interactions.
+
+    Args:
+        selected_data: Lasso/box selection payload.
+        click_data: Click selection payload.
+        clear_clicks: Clear selection click count.
+        category_clicks: Select category click count.
+        selected_ids: Current selected CELL_ID values.
+        loaded_dataset: CKAN dataset name or None.
+        color_by: Color-by mode.
+        category_value: Selected category value.
+
+    Returns:
+        Tuple of (updated selected ids, category warning flag).
+    """
     selected_ids = [int(cid) for cid in (selected_ids or [])]
     triggered = ctx.triggered_id
     if triggered == "clear-selection":
@@ -781,7 +938,15 @@ def update_selection(
     Input("selection-warning", "data"),
 )
 def update_selection_status(selected_ids, selection_warning):
-    """Update selection status text and warning styling."""
+    """Update selection status text and warning styling.
+
+    Args:
+        selected_ids: Selected CELL_ID values.
+        selection_warning: Warning flag for empty selections.
+
+    Returns:
+        Tuple of (status text, class name).
+    """
     count = len(selected_ids or [])
     class_name = "status"
     if selection_warning and count == 0:
@@ -795,7 +960,15 @@ def update_selection_status(selected_ids, selection_warning):
     Input("color-by", "value"),
 )
 def update_category_warning(category_warning, color_by):
-    """Highlight the category selector when a warning is active."""
+    """Highlight the category selector when a warning is active.
+
+    Args:
+        category_warning: Warning flag for category selection.
+        color_by: Color-by mode.
+
+    Returns:
+        Class name string for the category wrapper.
+    """
     base = "category-wrap"
     if color_by != "flux" and category_warning:
         return f"{base} warn-pulse"
@@ -807,7 +980,14 @@ def update_category_warning(category_warning, color_by):
     Input("flux-source", "value"),
 )
 def update_output_label(flux_source):
-    """Switch the output label based on flux source."""
+    """Switch the output label based on flux source.
+
+    Args:
+        flux_source: ``wel`` or ``rch``.
+
+    Returns:
+        Output label string.
+    """
     return "Output RCH filename" if flux_source == "rch" else "Output WEL filename"
 
 
@@ -848,7 +1028,28 @@ def apply_rate(
     change_summary,
     tapis_username,
 ):
-    """Apply rate updates and optionally publish to CKAN."""
+    """Apply rate updates and optionally publish to CKAN.
+
+    Args:
+        n_clicks: Click count from the apply button.
+        loaded_dataset: CKAN dataset name.
+        selected_ids: Selected CELL_ID values.
+        new_rate: New rate value.
+        rate_mode: ``set`` or ``scale_percent``.
+        add_missing: Checkbox values for add-missing.
+        layers: Selected layers.
+        periods: Selected stress periods.
+        update_counter: Current update counter.
+        jwt_token: CKAN JWT token.
+        dataset_name: Output dataset name.
+        output_wel: Output WEL filename.
+        source_url: Source URL string.
+        change_summary: Change summary string.
+        tapis_username: Tapis username for maintainer checks.
+
+    Returns:
+        Tuple of (status message, updated counter, selection warning flag).
+    """
     if not n_clicks:
         return "", update_counter, False
     if not loaded_dataset:
@@ -861,7 +1062,7 @@ def apply_rate(
     output_path = Path(output_wel or OUTPUT_WEL)
     if output_path.suffix.lower() != ".wel":
         output_path = output_path.with_suffix(".wel")
-    updated = fwm.apply_rate_update(
+    updated = apply_rate_update(
         wel,
         gdf,
         selected_ids,
@@ -944,7 +1145,20 @@ def apply_rate(
 def update_map(
     loaded_dataset, _load_counter, flux_source, color_by, periods, selected_ids, _update
 ):
-    """Refresh the map when dataset or settings change."""
+    """Refresh the map when dataset or settings change.
+
+    Args:
+        loaded_dataset: CKAN dataset name or None.
+        _load_counter: Load counter (unused).
+        flux_source: ``wel`` or ``rch``.
+        color_by: Color-by mode.
+        periods: Selected stress periods.
+        selected_ids: Selected CELL_ID values.
+        _update: Update counter (unused).
+
+    Returns:
+        Plotly Figure for the map.
+    """
     if not loaded_dataset:
         return go.Figure()
     data = load_dataset(loaded_dataset)
@@ -956,7 +1170,7 @@ def update_map(
     rch_cells = {}
     if rch is not None:
         try:
-            rch_cells = fwm.build_rch_cells_for_periods(rch, gdf, periods)
+            rch_cells = build_rch_cells_for_periods(rch, gdf, periods)
         except Exception:
             rch_cells = {}
     if flux_source == "rch":

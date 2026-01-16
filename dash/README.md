@@ -36,8 +36,18 @@ The app listens on http://localhost:8050 by default.
 - Provide a dataset name, output filename, and change summary.
 - Click Apply + Save to write the updated WEL and publish to CKAN.
 
+## Dataset discovery
+
+The dataset dropdown is populated from CKAN search results. A dataset is included only if it has
+resources advertising these standard variables:
+
+- WEL: `groundwater_well__recharge_volume_flux`
+- RCH: `groundwater__recharge_volume_flux`
+- Grid: `Modflow-Spatially-Distributed-Grid`
+
 ## Files
 
 - `dash/dash_app.py`: Dash UI and callbacks.
-- `dash/ckan_publish.py`: CKAN/Tapis helpers and publish logic.
+- `dash/ckan_publish.py`: Compatibility wrapper for the CKAN publish helpers.
 - `dash/assets/style.css`: Dash styling.
+- `flopy_interactive/`: Shared package code (CKAN search, loaders, viz helpers).
