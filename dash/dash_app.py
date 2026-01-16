@@ -30,10 +30,12 @@ OUTPUT_WEL = Path(os.environ.get("FLOPY_OUTPUT_WEL", "barton_springs_updated.wel
 
 @lru_cache(maxsize=1)
 def get_datasets() -> List[Dict]:
+    """Fetch CKAN datasets cached for the app session."""
     return fwm._search_ckan_datasets()
 
 
 def _get_dataset_or_none(name: str | None) -> Dict | None:
+    """Return dataset metadata matching a name, if present."""
     if not name:
         return None
     datasets = get_datasets()
@@ -45,6 +47,7 @@ def _get_dataset_or_none(name: str | None) -> Dict | None:
 
 @lru_cache(maxsize=8)
 def load_dataset(name: str) -> Dict:
+    """Download CKAN resources and assemble WEL/RCH/grid inputs."""
     dataset = _get_dataset_or_none(name)
     if not dataset:
         raise ValueError(f"Dataset not found: {name}")
@@ -89,6 +92,7 @@ def load_dataset(name: str) -> Dict:
 def _collect_wel_cells_for_periods(
     wel, gdf, periods: Sequence[int]
 ) -> Dict[int, float]:
+    """Aggregate WEL flux by cell across selected periods."""
     cell_id_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
     if not periods:
         spd = getattr(wel, "stress_period_data", None)
@@ -122,6 +126,7 @@ def _build_map_figure(
     force_linear: bool,
     selected_ids: Iterable[int],
 ) -> go.Figure:
+    """Build the Plotly map figure with grid and selection overlays."""
     gdf_map = gdf[["CELL_ID", "ROW", "COL", "geometry"]].copy()
     grid_geojson = gdf_map.set_index("CELL_ID").__geo_interface__
     center_lat = float(gdf["_lat"].median())
@@ -246,6 +251,7 @@ def _build_map_figure(
 
 
 def _dataset_options() -> List[Dict[str, str]]:
+    """Build dataset dropdown options from CKAN search."""
     try:
         datasets = get_datasets()
     except Exception:
@@ -254,6 +260,7 @@ def _dataset_options() -> List[Dict[str, str]]:
 
 
 def _owned_gam_datasets(username: str, jwt_token: str) -> List[Dict[str, str]]:
+    """List datasets owned by a user for suggestion dropdowns."""
     if not username or not jwt_token:
         return []
     options: List[Dict[str, str]] = []
@@ -273,6 +280,7 @@ def _owned_gam_datasets(username: str, jwt_token: str) -> List[Dict[str, str]]:
     return options
 
 def _slugify(value: str) -> str:
+    """Normalize a string for use in dataset naming."""
     value = value.strip().lower().replace(" ", "-")
     value = re.sub(r"[^a-z0-9\-_.]", "-", value)
     value = re.sub(r"-{2,}", "-", value)
@@ -483,6 +491,7 @@ app.layout = html.Div(
     Input("loaded-dataset", "data"),
 )
 def update_dataset_controls(loaded_dataset: str | None):
+    """Populate stress period and layer controls for the dataset."""
     if not loaded_dataset:
         return [], []
     data = load_dataset(loaded_dataset)
@@ -505,6 +514,7 @@ def update_dataset_controls(loaded_dataset: str | None):
     prevent_initial_call=False,
 )
 def load_selected_dataset(n_clicks, selected_dataset, load_counter):
+    """Load dataset resources and update load state messages."""
     if not selected_dataset:
         return None, "No dataset selected.", load_counter
     try:
@@ -528,6 +538,7 @@ def load_selected_dataset(n_clicks, selected_dataset, load_counter):
 def update_periods_layers(
     loaded_dataset, select_periods_clicks, select_layers_clicks, period_options, layer_options
 ):
+    """Handle select-all interactions for periods and layers."""
     triggered = ctx.triggered_id
     if triggered == "select-all-periods":
         period_values = [opt["value"] for opt in (period_options or [])]
@@ -569,6 +580,7 @@ def update_periods_layers(
     prevent_initial_call=True,
 )
 def login_ckan(n_clicks, username, password):
+    """Authenticate with Tapis and store the CKAN JWT."""
     if not n_clicks:
         raise dash.exceptions.PreventUpdate
     if not username or not password:
@@ -589,6 +601,7 @@ def login_ckan(n_clicks, username, password):
     Input("loaded-dataset", "data"),
 )
 def update_category_controls(color_by, loaded_dataset):
+    """Show or hide category selection controls by color mode."""
     if not loaded_dataset or color_by == "flux":
         return [], None, {"display": "none"}, True
     data = load_dataset(loaded_dataset)
@@ -608,6 +621,7 @@ def update_category_controls(color_by, loaded_dataset):
     Input("ckan-jwt", "data"),
 )
 def update_dataset_suggestions(username, jwt_token):
+    """Return dataset suggestions owned by the logged-in user."""
     return _owned_gam_datasets(username or "", jwt_token or "")
 
 
@@ -653,6 +667,7 @@ def suggest_names(
     current_source_url,
     current_change_summary,
 ):
+    """Generate dataset/output names and change summary from UI state."""
     if not loaded_dataset:
         return current_dataset_name, current_output_name, current_source_url, current_change_summary
     if suggested_name:
@@ -724,6 +739,7 @@ def update_selection(
     color_by,
     category_value,
 ):
+    """Update selected cell IDs based on map interactions."""
     selected_ids = [int(cid) for cid in (selected_ids or [])]
     triggered = ctx.triggered_id
     if triggered == "clear-selection":
@@ -765,6 +781,7 @@ def update_selection(
     Input("selection-warning", "data"),
 )
 def update_selection_status(selected_ids, selection_warning):
+    """Update selection status text and warning styling."""
     count = len(selected_ids or [])
     class_name = "status"
     if selection_warning and count == 0:
@@ -778,6 +795,7 @@ def update_selection_status(selected_ids, selection_warning):
     Input("color-by", "value"),
 )
 def update_category_warning(category_warning, color_by):
+    """Highlight the category selector when a warning is active."""
     base = "category-wrap"
     if color_by != "flux" and category_warning:
         return f"{base} warn-pulse"
@@ -789,6 +807,7 @@ def update_category_warning(category_warning, color_by):
     Input("flux-source", "value"),
 )
 def update_output_label(flux_source):
+    """Switch the output label based on flux source."""
     return "Output RCH filename" if flux_source == "rch" else "Output WEL filename"
 
 
@@ -829,6 +848,7 @@ def apply_rate(
     change_summary,
     tapis_username,
 ):
+    """Apply rate updates and optionally publish to CKAN."""
     if not n_clicks:
         return "", update_counter, False
     if not loaded_dataset:
@@ -924,6 +944,7 @@ def apply_rate(
 def update_map(
     loaded_dataset, _load_counter, flux_source, color_by, periods, selected_ids, _update
 ):
+    """Refresh the map when dataset or settings change."""
     if not loaded_dataset:
         return go.Figure()
     data = load_dataset(loaded_dataset)

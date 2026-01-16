@@ -21,10 +21,12 @@ WEL_STANDARD_VAR = "groundwater_well__recharge_volume_flux"
 
 
 def _now_iso() -> str:
+    """Return current UTC time in ISO8601 Zulu format."""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _slugify(value: str) -> str:
+    """Normalize a string for CKAN dataset/resource naming."""
     value = value.strip().lower().replace(" ", "-")
     value = re.sub(r"[^a-z0-9\-_.]", "-", value)
     value = re.sub(r"-{2,}", "-", value)
@@ -32,6 +34,7 @@ def _slugify(value: str) -> str:
 
 
 def _extras_to_dict(extras: Iterable[Dict]) -> Dict[str, str]:
+    """Convert CKAN extras list into a key/value dict."""
     result: Dict[str, str] = {}
     for item in extras or []:
         if not isinstance(item, dict):
@@ -44,12 +47,14 @@ def _extras_to_dict(extras: Iterable[Dict]) -> Dict[str, str]:
 
 
 def _merge_extras(existing: Iterable[Dict], additions: Dict[str, str]) -> List[Dict]:
+    """Merge extras with updates, returning CKAN list-of-dict format."""
     merged = _extras_to_dict(existing)
     merged.update({k: v for k, v in additions.items() if v is not None})
     return [{"key": key, "value": value} for key, value in merged.items()]
 
 
 def _extract_mint_svo(extras: Iterable[Dict]) -> Optional[str]:
+    """Find the MINT SVO value from known extras keys."""
     candidates = [
         "MINT_SVO",
         "MINT Standard Variables",
@@ -64,6 +69,7 @@ def _extract_mint_svo(extras: Iterable[Dict]) -> Optional[str]:
 
 
 def _resolve_mint_svo(resource: Dict, dataset: Dict) -> Optional[str]:
+    """Resolve the MINT SVO from resource or dataset metadata."""
     mint_svo = _extract_mint_svo(resource.get("extras", []))
     if mint_svo:
         return mint_svo
@@ -79,12 +85,14 @@ def _resolve_mint_svo(resource: Dict, dataset: Dict) -> Optional[str]:
 
 
 def get_tapis_token(username: str, password: str) -> str:
+    """Authenticate to Tapis and return the access token."""
     tapis = Tapis(base_url="https://portals.tapis.io", username=username, password=password)
     tapis.get_tokens()
     return tapis.access_token.access_token
 
 
 def get_jwt_token() -> str:
+    """Return a CKAN JWT from env or Tapis credentials."""
     jwt_token = os.environ.get("FLOPY_CKAN_JWT", "").strip()
     if jwt_token:
         return jwt_token
@@ -96,10 +104,12 @@ def get_jwt_token() -> str:
 
 
 def _headers(jwt_token: str) -> Dict[str, str]:
+    """Build auth headers for CKAN API requests."""
     return {"Authorization": f"Bearer {jwt_token}"}
 
 
 def package_show(jwt_token: str, dataset_name: str) -> Dict:
+    """Fetch CKAN dataset metadata by name."""
     url = f"{CKAN_URL}/api/3/action/package_show"
     response = requests.get(url, params={"id": dataset_name}, headers=_headers(jwt_token), timeout=60)
     response.raise_for_status()
@@ -110,6 +120,7 @@ def package_show(jwt_token: str, dataset_name: str) -> Dict:
 
 
 def create_dataset(jwt_token: str, dataset_dict: Dict) -> Dict:
+    """Create a new CKAN dataset."""
     url = f"{CKAN_URL}/api/3/action/package_create"
     response = requests.post(url, json=dataset_dict, headers=_headers(jwt_token), timeout=60)
     if response.status_code == 409:
@@ -127,6 +138,7 @@ def create_resource_upload(
     file_path: Path,
     resource_dict: Dict,
 ) -> Dict:
+    """Upload a file as a CKAN resource."""
     url = f"{CKAN_URL}/api/3/action/resource_create"
     data = {
         "package_id": dataset_id,
@@ -156,6 +168,7 @@ def build_dataset_payload(
     change_summary: str | None = None,
     maintainer_username: str | None = None,
 ) -> Dict:
+    """Create a dataset payload derived from a source dataset."""
     copy_fields = [
         "title",
         "notes",
@@ -206,6 +219,7 @@ def build_resource_payload(
     source_url: str | None = None,
     change_summary: str | None = None,
 ) -> Dict:
+    """Create a resource payload derived from a source resource."""
     extras = source_resource.get("extras", [])
     extras = _merge_extras(
         extras,
@@ -243,6 +257,7 @@ def publish_updated_wel(
     change_summary: Optional[str] = None,
     maintainer_username: Optional[str] = None,
 ) -> Dict:
+    """Create or update a derived dataset and upload the updated WEL file."""
     jwt_token = jwt_token or get_jwt_token()
     source_dataset = package_show(jwt_token, source_dataset_name)
     resources = source_dataset.get("resources", [])

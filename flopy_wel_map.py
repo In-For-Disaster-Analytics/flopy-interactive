@@ -802,11 +802,15 @@ def apply_rate_update(
     output_path: Path,
 ) -> int:
     spd = wel.stress_period_data.data
+    spd_dtype = getattr(wel.stress_period_data, "dtype", None)
     cell_lookup = dict(zip(gdf["CELL_ID"], zip(gdf["ROW"], gdf["COL"])))
     selected_cells = {cell_lookup[cid] for cid in selected_ids if cid in cell_lookup}
     new_spd = {}
     for per, recs in spd.items():
-        recs = recs.copy()
+        if spd_dtype is not None:
+            recs = np.array(recs, dtype=spd_dtype)
+        else:
+            recs = np.array(recs)
         if periods_for_update and per not in periods_for_update:
             new_spd[per] = recs
             continue
@@ -837,6 +841,14 @@ def apply_rate_update(
                         idx += 1
                 recs = new_recs
         new_spd[per] = recs
+    if spd_dtype is not None:
+        cleaned = {}
+        for per, recs in new_spd.items():
+            if recs is None or len(recs) == 0:
+                cleaned[per] = np.zeros(0, dtype=spd_dtype)
+            else:
+                cleaned[per] = np.array(recs, dtype=spd_dtype)
+        new_spd = cleaned
     wel.stress_period_data = new_spd
     wel.write_file(str(output_path))
     return len(selected_cells)
