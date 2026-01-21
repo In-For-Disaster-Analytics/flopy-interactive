@@ -157,6 +157,127 @@ def _map_rch_cells(arrays: Sequence[np.ndarray], gdf) -> Dict[int, float]:
     return max(candidates, key=lambda c: sum(1 for v in c.values() if v != 0.0))
 
 
+def _normalize_rch_arrays(
+    arrays: Sequence[np.ndarray], nrow: int, ncol: int
+) -> List[np.ndarray]:
+    """Normalize RCH arrays to 2D slices using grid dimensions."""
+    normalized: List[np.ndarray] = []
+    for arr in arrays:
+        arr = np.asarray(arr)
+        if arr.ndim == 1:
+            if arr.size == nrow * ncol:
+                normalized.append(arr.reshape((nrow, ncol)))
+                continue
+            if arr.size % (nrow * ncol) == 0:
+                count = arr.size // (nrow * ncol)
+                reshaped = arr.reshape((count, nrow, ncol))
+                normalized.extend([reshaped[idx] for idx in range(count)])
+                continue
+        if arr.ndim == 2:
+            normalized.append(arr)
+            continue
+        if arr.ndim == 3:
+            normalized.extend([arr[idx] for idx in range(arr.shape[0])])
+    return normalized
+
+
+def _choose_rch_indexing(arrays: Sequence[np.ndarray], gdf) -> tuple[int, bool]:
+    """Pick offset/swap mapping that best matches nonzero RCH values."""
+    if not arrays:
+        return 0, False
+    cell_pairs = list(zip(gdf["ROW"], gdf["COL"]))
+    candidates = [(0, False), (-1, False), (0, True), (-1, True)]
+    best_score = -1
+    best_choice = (0, False)
+    for offset, swap in candidates:
+        score = 0
+        for row, col in cell_pairs:
+            if swap:
+                row_idx = int(col) + offset
+                col_idx = int(row) + offset
+            else:
+                row_idx = int(row) + offset
+                col_idx = int(col) + offset
+            values = []
+            for arr in arrays:
+                if 0 <= row_idx < arr.shape[0] and 0 <= col_idx < arr.shape[1]:
+                    values.append(float(arr[row_idx, col_idx]))
+            if not values:
+                continue
+            flux = max(values, key=lambda v: abs(v))
+            if flux != 0.0:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_choice = (offset, swap)
+    return best_choice
+
+
+def _write_rch_numeric(output_path: Path, arrays: Sequence[np.ndarray]) -> None:
+    """Write RCH arrays as plain numeric text for re-loading."""
+    with output_path.open("w", encoding="utf-8") as handle:
+        for idx, arr in enumerate(arrays):
+            if idx:
+                handle.write("\n")
+            np.savetxt(handle, np.asarray(arr), fmt="%.6g")
+
+
+def apply_rch_rate_update(
+    rch,
+    gdf,
+    selected_ids,
+    new_rate: float,
+    rate_mode: str,
+    periods_for_update: Sequence[int],
+    output_path: Path,
+) -> int:
+    """Apply rate updates to an RCH package/array and write a new file."""
+    arrays = _rch_to_arrays(rch)
+    nrow = int(gdf["ROW"].max())
+    ncol = int(gdf["COL"].max())
+    normalized = _normalize_rch_arrays(arrays, nrow, ncol)
+    if not normalized:
+        _write_rch_numeric(output_path, [])
+        return 0
+    offset, swap = _choose_rch_indexing(normalized, gdf)
+    cell_lookup = dict(zip(gdf["CELL_ID"], zip(gdf["ROW"], gdf["COL"])))
+    selected_cells = [cell_lookup[cid] for cid in selected_ids if cid in cell_lookup]
+    if not periods_for_update:
+        periods = list(range(len(normalized)))
+    else:
+        periods = [int(p) for p in periods_for_update if 0 <= int(p) < len(normalized)]
+        if not periods:
+            periods = list(range(len(normalized)))
+    for per in periods:
+        arr = np.array(normalized[per], dtype=float, copy=True)
+        for row, col in selected_cells:
+            if swap:
+                row_idx = int(col) + offset
+                col_idx = int(row) + offset
+            else:
+                row_idx = int(row) + offset
+                col_idx = int(col) + offset
+            if 0 <= row_idx < arr.shape[0] and 0 <= col_idx < arr.shape[1]:
+                if rate_mode == "scale_percent":
+                    arr[row_idx, col_idx] *= 1.0 + (float(new_rate) / 100.0)
+                else:
+                    arr[row_idx, col_idx] = float(new_rate)
+        normalized[per] = arr
+    wrote = False
+    if hasattr(rch, "write_file") and hasattr(rch, "rech"):
+        try:
+            if len(normalized) == 1:
+                rch.rech = np.array(normalized[0])
+            else:
+                rch.rech = np.stack([np.array(arr) for arr in normalized])
+            rch.write_file(str(output_path))
+            wrote = True
+        except Exception:
+            wrote = False
+    if not wrote:
+        _write_rch_numeric(output_path, normalized)
+    return len(selected_cells)
+
 def build_rch_cells(rch, gdf) -> Dict[int, float]:
     """Map RCH arrays to grid cell IDs.
 

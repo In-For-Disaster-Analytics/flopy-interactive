@@ -129,3 +129,58 @@ def search_ckan_datasets() -> List[Dict]:
         if start >= result.get("count", 0):
             break
     return matched
+
+
+def search_ckan_datasets_wel_rch(no_grid: bool = False) -> List[Dict]:
+    """Return CKAN datasets that have WEL or RCH resources.
+
+    Args:
+        no_grid: When True, exclude datasets that also have grid resources.
+
+    Returns:
+        List of dataset dicts with ``name``, ``title``, and ``matches``.
+    """
+    base_url = f"{CKAN_BASE_URL}/api/3/action/package_search"
+    start = 0
+    rows = 100
+    matched: List[Dict] = []
+    targets = {
+        "wel": WEL_STANDARD_VAR,
+        "rch": RCH_STANDARD_VAR,
+        "grid": GRID_STANDARD_VAR,
+    }
+
+    while True:
+        url = f"{base_url}?rows={rows}&start={start}"
+        with urlopen(url) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        if not payload.get("success"):
+            raise RuntimeError("CKAN search failed.")
+        result = payload["result"]
+        results = result.get("results", [])
+        for pkg in results:
+            resources = pkg.get("resources", [])
+            matches = {"wel": [], "rch": [], "grid": []}
+            for res in resources:
+                if resource_has_standard_var(res, targets["wel"]):
+                    matches["wel"].append(res)
+                if resource_has_standard_var(res, targets["rch"]):
+                    matches["rch"].append(res)
+                if resource_has_standard_var(res, targets["grid"]):
+                    matches["grid"].append(res)
+            has_target = bool(matches["wel"] or matches["rch"])
+            if not has_target:
+                continue
+            if no_grid and matches["grid"]:
+                continue
+            matched.append(
+                {
+                    "name": pkg.get("name") or pkg.get("id"),
+                    "title": pkg.get("title") or pkg.get("name") or pkg.get("id"),
+                    "matches": matches,
+                }
+            )
+        start += rows
+        if start >= result.get("count", 0):
+            break
+    return matched

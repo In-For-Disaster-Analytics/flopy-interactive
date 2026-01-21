@@ -9,6 +9,99 @@ import flopy
 import numpy as np
 
 
+class _SimpleStressPeriodData:
+    """Lightweight container for MFUSG stress period data."""
+
+    def __init__(self, data: Dict[int, np.recarray], dtype: np.dtype) -> None:
+        self.data = data
+        self.dtype = dtype
+
+
+class MfusgWel:
+    """Minimal MFUSG WEL representation with node-based records."""
+
+    is_mfusg = True
+
+    def __init__(self, header_line: str, spd: Dict[int, np.recarray], dtype: np.dtype) -> None:
+        self.header_line = header_line.rstrip("\n")
+        self.stress_period_data = _SimpleStressPeriodData(spd, dtype)
+
+    def write_file(self, output_path: Path) -> None:
+        """Write MFUSG WEL records back to disk."""
+        lines = [self.header_line]
+        periods = sorted(self.stress_period_data.data.keys())
+        for per in periods:
+            recs = self.stress_period_data.data.get(per)
+            itmp = 0 if recs is None else len(recs)
+            lines.append(f"{itmp} 0 0                  Stress Period {per + 1}")
+            if itmp > 0:
+                for rec in recs:
+                    lines.append(f"{int(rec['node'])} {float(rec['flux']):.6g}")
+        output_path.write_text("\n".join(lines) + "\n")
+
+
+def _strip_comment(line: str) -> str:
+    for token in ("#", ";"):
+        if token in line:
+            line = line.split(token, 1)[0]
+    return line.strip()
+
+
+def _detect_mfusg_wel(path: Path) -> bool:
+    """Return True if the WEL file looks like MFUSG node-based format."""
+    lines = [_strip_comment(line) for line in path.read_text().splitlines()]
+    data_lines = [line for line in lines if line]
+    if len(data_lines) < 3:
+        return False
+    # First line is header; next line is stress-period header; third line is first record
+    first_record = data_lines[2].split()
+    if len(first_record) < 2:
+        return False
+    try:
+        int(first_record[1])
+    except ValueError:
+        return True
+    return False
+
+
+def _load_mfusg_wel(wel_path: Path) -> MfusgWel:
+    """Load MFUSG node-based WEL data from disk."""
+    lines = [_strip_comment(line) for line in wel_path.read_text().splitlines()]
+    data_lines = [line for line in lines if line]
+    if len(data_lines) < 2:
+        raise ValueError("WEL file is empty or has no data.")
+    header = data_lines[0]
+    spd: Dict[int, np.recarray] = {}
+    dtype = np.dtype([("node", "i4"), ("flux", "f8")])
+    idx = 1
+    per = 0
+    while idx < len(data_lines):
+        tokens = data_lines[idx].split()
+        idx += 1
+        if not tokens:
+            continue
+        itmp = int(tokens[0])
+        if itmp < 0 and (per - 1) in spd:
+            spd[per] = np.rec.array(spd[per - 1], dtype=dtype)
+            per += 1
+            continue
+        records = []
+        if itmp > 0:
+            for _ in range(itmp):
+                if idx >= len(data_lines):
+                    raise ValueError("Unexpected end of file while scanning wells.")
+                parts = data_lines[idx].split()
+                idx += 1
+                if len(parts) < 2:
+                    continue
+                node = int(float(parts[0]))
+                flux = float(parts[1])
+                records.append((node, flux))
+        spd[per] = np.rec.array(records, dtype=dtype) if records else np.recarray(0, dtype=dtype)
+        per += 1
+    return MfusgWel(header, spd, dtype)
+
+
 def scan_wel_metadata(path: Path) -> Tuple[int, int, int, int]:
     """Scan a MODFLOW WEL file for grid dimensions.
 
@@ -18,13 +111,7 @@ def scan_wel_metadata(path: Path) -> Tuple[int, int, int, int]:
     Returns:
         Tuple of (nper, nlay, nrow, ncol).
     """
-    def strip_comment(line: str) -> str:
-        for token in ("#", ";"):
-            if token in line:
-                line = line.split(token, 1)[0]
-        return line.strip()
-
-    lines = [strip_comment(line) for line in path.read_text().splitlines()]
+    lines = [_strip_comment(line) for line in path.read_text().splitlines()]
     data_lines = [line for line in lines if line]
     if not data_lines:
         raise ValueError("WEL file is empty or has no data.")
@@ -62,6 +149,8 @@ def load_wel(wel_path: Path) -> flopy.modflow.ModflowWel:
     Returns:
         FloPy WEL package.
     """
+    if _detect_mfusg_wel(wel_path):
+        return _load_mfusg_wel(wel_path)
     nper, nlay, nrow, ncol = scan_wel_metadata(wel_path)
     model = flopy.modflow.Modflow(modelname="wel_read", model_ws=str(wel_path.parent))
     flopy.modflow.ModflowDis(
@@ -78,9 +167,16 @@ def load_wel(wel_path: Path) -> flopy.modflow.ModflowWel:
     return flopy.modflow.ModflowWel.load(str(wel_path), model)
 
 
+def build_cell_id_lookup(gdf, wel) -> Dict:
+    """Build a cell-id lookup keyed by node or (row, col)."""
+    if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+        return dict(zip(gdf["NODE_NUM"], gdf["CELL_ID"]))
+    return dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
+
+
 def collect_wel_cells_for_period_data(
     wel: flopy.modflow.ModflowWel,
-    cell_id_lookup: Dict[Tuple[int, int], int],
+    cell_id_lookup: Dict,
     period: int,
     row_offset: int,
     col_offset: int,
@@ -103,9 +199,13 @@ def collect_wel_cells_for_period_data(
         return cells
     recs = spd[period]
     for rec in recs:
-        row = int(rec["i"]) + row_offset
-        col = int(rec["j"]) + col_offset
-        cell_id = cell_id_lookup.get((row, col))
+        if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+            node = int(rec["node"])
+            cell_id = cell_id_lookup.get(node)
+        else:
+            row = int(rec["i"]) + row_offset
+            col = int(rec["j"]) + col_offset
+            cell_id = cell_id_lookup.get((row, col))
         if cell_id is None:
             continue
         flux = float(rec["flux"])
@@ -143,53 +243,70 @@ def apply_rate_update(
         Count of selected cells processed.
     """
     spd = wel.stress_period_data.data
-    spd_dtype = getattr(wel.stress_period_data, "dtype", None)
-    cell_lookup = dict(zip(gdf["CELL_ID"], zip(gdf["ROW"], gdf["COL"])))
-    selected_cells = {cell_lookup[cid] for cid in selected_ids if cid in cell_lookup}
-    new_spd = {}
+    base_dtype = getattr(wel.stress_period_data, "dtype", None)
+    if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+        node_lookup = dict(zip(gdf["CELL_ID"], gdf["NODE_NUM"]))
+        selected_cells = {int(node_lookup[cid]) for cid in selected_ids if cid in node_lookup}
+    else:
+        cell_lookup = dict(zip(gdf["CELL_ID"], zip(gdf["ROW"], gdf["COL"])))
+        selected_cells = {cell_lookup[cid] for cid in selected_ids if cid in cell_lookup}
+    updated_spd = spd
     for per, recs in spd.items():
-        if spd_dtype is not None:
-            recs = np.array(recs, dtype=spd_dtype)
-        else:
-            recs = np.array(recs)
+        if base_dtype is None and hasattr(recs, "dtype") and recs.dtype.names:
+            base_dtype = recs.dtype
+        if base_dtype is None:
+            raise ValueError("WEL stress_period_data dtype unavailable.")
         if periods_for_update and per not in periods_for_update:
-            new_spd[per] = recs
             continue
-        mask = []
-        for rec in recs:
-            i = int(rec["i"])
-            j = int(rec["j"])
-            mask.append((i, j) in selected_cells)
-        mask = np.array(mask, dtype=bool)
+        recs = np.rec.array(recs, dtype=base_dtype)
+        if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+            mask = np.array([int(rec["node"]) in selected_cells for rec in recs], dtype=bool)
+        else:
+            mask = []
+            for rec in recs:
+                i = int(rec["i"])
+                j = int(rec["j"])
+                mask.append((i, j) in selected_cells)
+            mask = np.array(mask, dtype=bool)
         if rate_mode == "scale_percent":
             recs["flux"][mask] *= 1.0 + (float(new_rate) / 100.0)
         else:
             recs["flux"][mask] = float(new_rate)
         if add_missing and selected_cells:
-            existing = set((int(r["i"]), int(r["j"])) for r in recs)
-            to_add = [cell for cell in selected_cells if cell not in existing]
-            if to_add:
-                layers = [int(layer) for layer in layers_for_new] or [1]
-                new_recs = np.zeros(len(recs) + len(to_add) * len(layers), dtype=recs.dtype)
-                new_recs[: len(recs)] = recs
-                idx = len(recs)
-                for row, col in to_add:
-                    for layer in layers:
-                        new_recs[idx]["k"] = int(layer)
-                        new_recs[idx]["i"] = int(row)
-                        new_recs[idx]["j"] = int(col)
+            if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+                existing = set(int(r["node"]) for r in recs)
+                to_add = [node for node in selected_cells if node not in existing]
+                if to_add:
+                    new_recs = np.recarray(len(recs) + len(to_add), dtype=base_dtype)
+                    new_recs[: len(recs)] = recs
+                    idx = len(recs)
+                    for node in to_add:
+                        new_recs[idx]["node"] = int(node)
                         new_recs[idx]["flux"] = float(new_rate)
                         idx += 1
-                recs = new_recs
-        new_spd[per] = recs
-    if spd_dtype is not None:
-        cleaned = {}
-        for per, recs in new_spd.items():
-            if recs is None or len(recs) == 0:
-                cleaned[per] = np.zeros(0, dtype=spd_dtype)
+                    recs = new_recs
             else:
-                cleaned[per] = np.array(recs, dtype=spd_dtype)
-        new_spd = cleaned
-    wel.stress_period_data = new_spd
+                existing = set((int(r["i"]), int(r["j"])) for r in recs)
+                to_add = [cell for cell in selected_cells if cell not in existing]
+                if to_add:
+                    layers = [int(layer) for layer in layers_for_new] or [1]
+                    new_recs = np.recarray(len(recs) + len(to_add) * len(layers), dtype=base_dtype)
+                    new_recs[: len(recs)] = recs
+                    idx = len(recs)
+                    for row, col in to_add:
+                        for layer in layers:
+                            new_recs[idx]["k"] = int(layer)
+                            new_recs[idx]["i"] = int(row)
+                            new_recs[idx]["j"] = int(col)
+                            new_recs[idx]["flux"] = float(new_rate)
+                            idx += 1
+                    recs = new_recs
+        updated_spd[per] = recs
+    if base_dtype is not None:
+        for per, recs in updated_spd.items():
+            if recs is None or len(recs) == 0:
+                updated_spd[per] = np.recarray(0, dtype=base_dtype)
+            else:
+                updated_spd[per] = np.rec.array(recs, dtype=base_dtype)
     wel.write_file(str(output_path))
     return len(selected_cells)

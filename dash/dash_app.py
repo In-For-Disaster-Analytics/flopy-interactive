@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List, Sequence
 import dash
 from dash import Input, Output, State, dcc, html, ctx
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -20,16 +21,27 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 import ckan_publish as ckanp
-from flopy_interactive.ckankit.search import resource_has_standard_var, search_ckan_datasets
+from flopy_interactive.ckankit.search import (
+    resource_has_standard_var,
+    search_ckan_datasets,
+    search_ckan_datasets_wel_rch,
+)
+from flopy_interactive.config import GRID_STANDARD_VAR
 from flopy_interactive.data.download import download_ckan_resource
 from flopy_interactive.data.grid import load_grid_resource
-from flopy_interactive.data.rch import build_rch_cells_for_periods, load_rch
-from flopy_interactive.data.wel import apply_rate_update, collect_wel_cells_for_period_data, load_wel
+from flopy_interactive.data.rch import apply_rch_rate_update, build_rch_cells_for_periods, load_rch
+from flopy_interactive.data.wel import (
+    apply_rate_update,
+    build_cell_id_lookup,
+    collect_wel_cells_for_period_data,
+    load_wel,
+)
 from flopy_interactive.viz.color_modes import apply_color_mode
 
 
 DATA_DIR = Path(os.environ.get("FLOPY_DATA_DIR", "ckan_data"))
 OUTPUT_WEL = Path(os.environ.get("FLOPY_OUTPUT_WEL", "barton_springs_updated.wel"))
+SUGGEST_TITLE_FILTER = "Barton Springs Edwards Aquifer"
 
 
 def get_datasets() -> List[Dict]:
@@ -94,7 +106,7 @@ def load_dataset(name: str) -> Dict:
         rch = load_rch(rch_path, nrow=nrow, ncol=ncol, nper=nper)
     except Exception:
         rch = None
-    cell_id_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
+    cell_id_lookup = build_cell_id_lookup(gdf, wel)
     nlay = 1
     if hasattr(wel, "parent") and wel.parent is not None:
         nlay = int(getattr(wel.parent.dis, "nlay", 1))
@@ -125,7 +137,7 @@ def _collect_wel_cells_for_periods(
     Returns:
         Mapping of CELL_ID to flux value.
     """
-    cell_id_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
+    cell_id_lookup = build_cell_id_lookup(gdf, wel)
     if not periods:
         spd = getattr(wel, "stress_period_data", None)
         periods = list(spd.data.keys()) if spd is not None and hasattr(spd, "data") else []
@@ -141,12 +153,10 @@ def _collect_wel_cells_for_periods(
                     cells[cid] = flux
         return cells
 
-    if periods:
-        base = _merge_periods(0, 0)
-        offset = _merge_periods(1, 1)
-    else:
-        base = _merge_periods(0, 0)
-        offset = _merge_periods(1, 1)
+    if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+        return _merge_periods(0, 0)
+    base = _merge_periods(0, 0)
+    offset = _merge_periods(1, 1)
     return offset if len(offset) > len(base) else base
 
 
@@ -157,6 +167,8 @@ def _build_map_figure(
     color_by: str,
     force_linear: bool,
     selected_ids: Iterable[int],
+    zoom: float | None = None,
+    show_grid: bool = False,
 ) -> go.Figure:
     """Build the Plotly map figure with grid and selection overlays.
 
@@ -167,49 +179,72 @@ def _build_map_figure(
         color_by: ``flux`` or category column name.
         force_linear: Whether to force linear scaling.
         selected_ids: Iterable of selected CELL_ID values.
+        zoom: Optional zoom level for downsampling.
+        show_grid: Whether to render the grid choropleth layer.
 
     Returns:
         Plotly Figure for the map.
     """
     gdf_map = gdf[["CELL_ID", "ROW", "COL", "geometry"]].copy()
-    grid_geojson = gdf_map.set_index("CELL_ID").__geo_interface__
+    gdf_valid = gdf_map[gdf_map["geometry"].notna()].copy()
+    gdf_choro = _downsample_for_choropleth(gdf_valid, gdf, zoom)
+    grid_geojson = gdf_choro.set_index("CELL_ID").__geo_interface__
     center_lat = float(gdf["_lat"].median())
     center_lon = float(gdf["_lon"].median())
 
     fig = go.Figure()
     z_values = [float(cells.get(int(cid), 0.0)) for cid in gdf["CELL_ID"]]
-    fig.add_trace(
-        go.Choroplethmap(
-            geojson=grid_geojson,
-            locations=gdf["CELL_ID"],
-            z=z_values,
-            colorscale=[(0.0, "#2b6cb0"), (0.5, "#ffffff"), (1.0, "#c53030")],
-            marker_opacity=0.35,
-            marker_line_width=0.5,
-            marker_line_color="#666",
-            showscale=False,
-            name="Grid",
-            customdata=np.stack(
-                [
-                    gdf["CELL_ID"],
-                    z_values,
-                    gdf["GCD_Name"].fillna("Unknown").astype(str),
-                    gdf["PGMA_Name"].fillna("Unknown").astype(str),
-                ],
-                axis=1,
-            ),
-            hovertemplate=(
-                "CELL_ID=%{customdata[0]}<br>"
-                "Flux=%{customdata[1]:.2f}<br>"
-                "GCD=%{customdata[2]}<br>"
-                "PGMA=%{customdata[3]}<extra></extra>"
-            ),
-        )
+    z_values_choro = [float(cells.get(int(cid), 0.0)) for cid in gdf_choro["CELL_ID"]]
+    z_values_valid = [float(cells.get(int(cid), 0.0)) for cid in gdf_valid["CELL_ID"]]
+    gcd_values = (
+        gdf["GCD_Name"].fillna("Unknown").astype(str)
+        if "GCD_Name" in gdf.columns
+        else pd.Series(["Unknown"] * len(gdf), index=gdf.index)
     )
+    pgma_values = (
+        gdf["PGMA_Name"].fillna("Unknown").astype(str)
+        if "PGMA_Name" in gdf.columns
+        else pd.Series(["Unknown"] * len(gdf), index=gdf.index)
+    )
+    if show_grid:
+        fig.add_trace(
+            go.Choroplethmap(
+                geojson=grid_geojson,
+                locations=gdf_choro["CELL_ID"],
+                z=z_values_choro,
+                colorscale=[(0.0, "#2b6cb0"), (0.5, "#ffffff"), (1.0, "#c53030")],
+                marker_opacity=0.35,
+                marker_line_width=0.5,
+                marker_line_color="#666",
+                showscale=False,
+                name="Grid",
+                customdata=np.stack(
+                    [
+                        gdf_choro["CELL_ID"],
+                        z_values_choro,
+                        gcd_values.loc[gdf_choro.index],
+                        pgma_values.loc[gdf_choro.index],
+                    ],
+                    axis=1,
+                ),
+                hovertemplate=(
+                    "CELL_ID=%{customdata[0]}<br>"
+                    "Flux=%{customdata[1]:.2f}<br>"
+                    "GCD=%{customdata[2]}<br>"
+                    "PGMA=%{customdata[3]}<extra></extra>"
+                ),
+            )
+        )
+    active_ids = {int(cid) for cid, flux in cells.items() if float(flux) != 0.0}
+    if active_ids:
+        gdf_scatter = gdf[gdf["CELL_ID"].isin(active_ids)].copy()
+    else:
+        gdf_scatter = gdf.copy()
+    gdf_scatter = gdf_scatter[gdf_scatter["_lon"].notna() & gdf_scatter["_lat"].notna()].copy()
     fig.add_trace(
         go.Scattermap(
-            lon=gdf["_lon"],
-            lat=gdf["_lat"],
+            lon=gdf_scatter["_lon"],
+            lat=gdf_scatter["_lat"],
             mode="markers",
             marker=dict(
                 size=6,
@@ -233,12 +268,12 @@ def _build_map_figure(
             name="Cells",
             customdata=np.stack(
                 [
-                    gdf["CELL_ID"],
-                    gdf["ROW"],
-                    gdf["COL"],
-                    z_values,
-                    gdf["GCD_Name"].fillna("Unknown").astype(str),
-                    gdf["PGMA_Name"].fillna("Unknown").astype(str),
+                    gdf_scatter["CELL_ID"],
+                    gdf_scatter["ROW"],
+                    gdf_scatter["COL"],
+                    [float(cells.get(int(cid), 0.0)) for cid in gdf_scatter["CELL_ID"]],
+                    gcd_values.loc[gdf_scatter.index],
+                    pgma_values.loc[gdf_scatter.index],
                 ],
                 axis=1,
             ),
@@ -265,9 +300,10 @@ def _build_map_figure(
         )
     )
 
+    color_gdf = gdf if show_grid else gdf_scatter
     apply_color_mode(
         fig,
-        gdf,
+        color_gdf,
         cells,
         color_by,
         normalize=False,
@@ -276,7 +312,7 @@ def _build_map_figure(
     )
 
     selected_ids = {int(cid) for cid in selected_ids}
-    if selected_ids:
+    if selected_ids and len(fig.data) > 2:
         selected_rows = gdf[gdf["CELL_ID"].isin(selected_ids)]
         fig.data[2].update(lon=selected_rows["_lon"], lat=selected_rows["_lat"])
 
@@ -310,6 +346,49 @@ def _dataset_options() -> List[Dict[str, str]]:
     return [{"label": d["title"], "value": d["name"]} for d in datasets]
 
 
+def _dataset_options_without_grid(datasets: List[Dict]) -> List[Dict[str, str]]:
+    """Build dataset options excluding datasets that include grid resources."""
+    filtered = []
+    for dataset in datasets:
+        name = dataset.get("name")
+        if not name:
+            continue
+        title = str(dataset.get("title") or "").strip()
+        if SUGGEST_TITLE_FILTER.lower() not in title.lower():
+            continue
+        if any(resource_has_standard_var(res, GRID_STANDARD_VAR) for res in dataset.get("matches", {}).get("grid", [])):
+            continue
+        filtered.append({"label": dataset.get("title", name), "value": name})
+    return filtered
+
+
+def _downsample_for_choropleth(gdf_valid, gdf_full, zoom: float | None) -> pd.DataFrame:
+    """Downsample grid polygons for choropleth rendering based on zoom."""
+    if zoom is None:
+        bin_size = 0.5
+    elif zoom < 6:
+        bin_size = 0.5
+    elif zoom < 7:
+        bin_size = 0.25
+    elif zoom < 8:
+        bin_size = 0.125
+    elif zoom < 9:
+        bin_size = 0.06
+    elif zoom < 10:
+        bin_size = 0.03
+    elif zoom < 11:
+        bin_size = 0.015
+    else:
+        return gdf_valid
+    if "_lon" not in gdf_full.columns or "_lat" not in gdf_full.columns:
+        return gdf_valid
+    gdf_bins = gdf_full.loc[gdf_valid.index, ["_lon", "_lat"]].copy()
+    lon_bins = np.floor(gdf_bins["_lon"] / bin_size)
+    lat_bins = np.floor(gdf_bins["_lat"] / bin_size)
+    gdf_bins["_bin_key"] = list(zip(lon_bins, lat_bins))
+    return gdf_valid.loc[gdf_bins.drop_duplicates("_bin_key").index]
+
+
 def _owned_gam_datasets(username: str, jwt_token: str) -> List[Dict[str, str]]:
     """List datasets owned by a user for suggestion dropdowns.
 
@@ -327,16 +406,37 @@ def _owned_gam_datasets(username: str, jwt_token: str) -> List[Dict[str, str]]:
         name = dataset.get("name")
         if not name:
             continue
+        title = str(dataset.get("title") or "").strip()
+        if SUGGEST_TITLE_FILTER.lower() not in title.lower():
+            continue
         try:
             details = ckanp.package_show(jwt_token, name)
         except Exception:
             continue
+        resources = details.get("resources", [])
+        if any(resource_has_standard_var(res, GRID_STANDARD_VAR) for res in resources):
+            continue
         maintainer = str(details.get("maintainer", "")).strip().lower()
         maintainer_email = str(details.get("maintainer_email", "")).strip().lower()
+        author = str(details.get("author", "")).strip().lower()
+        author_email = str(details.get("author_email", "")).strip().lower()
         target = username.strip().lower()
         if maintainer and (maintainer == target or maintainer_email == target):
             options.append({"label": details.get("title", name), "value": name})
+            continue
+        if author and (author == target or author_email == target):
+            options.append({"label": details.get("title", name), "value": name})
     return options
+
+
+def _suggest_gam_datasets(username: str, jwt_token: str) -> List[Dict[str, str]]:
+    """Return owned datasets when available, else all matched GAM datasets."""
+    datasets = search_ckan_datasets_wel_rch(no_grid=True)
+    if jwt_token:
+        owned = _owned_gam_datasets(username, jwt_token)
+        if owned:
+            return owned
+    return _dataset_options_without_grid(datasets)
 
 def _slugify(value: str) -> str:
     """Normalize a string for use in dataset naming.
@@ -369,6 +469,7 @@ app.layout = html.Div(
         dcc.Store(id="login-message", data=""),
         dcc.Store(id="tapis-username", data=""),
         dcc.Store(id="name-seed", data=str(uuid.uuid4())),
+        dcc.Store(id="last-loaded-dataset", data=""),
         dcc.Store(id="selection-warning", data=False),
         dcc.Store(id="category-warning", data=False),
         html.Div(
@@ -456,17 +557,32 @@ app.layout = html.Div(
                             className="category-wrap",
                             style={"display": "none"},
                         ),
-                        html.Label("Stress periods"),
-                        dcc.Dropdown(
-                            id="periods",
-                            options=[],
-                            value=[],
-                            multi=True,
-                            className="dropdown-scroll",
+                        html.Div(
+                            [
+                                html.Label("Color period (flux)"),
+                                dcc.Dropdown(
+                                    id="color-period",
+                                    options=[],
+                                    value=None,
+                                    clearable=True,
+                                ),
+                            ],
+                            id="color-period-wrap",
                         ),
-                        html.Button("Select all periods", id="select-all-periods", n_clicks=0),
-                        html.Hr(),
-                        html.Label("Rate mode"),
+        html.Hr(),
+        html.H4("Edit selection"),
+        html.Label("Stress periods"),
+        dcc.Dropdown(
+            id="periods",
+            options=[],
+            value=[],
+            multi=True,
+            className="dropdown-scroll",
+        ),
+        html.Div(id="periods-summary", className="status"),
+        html.Button("Select all periods", id="select-all-periods", n_clicks=0),
+        html.Hr(),
+        html.Label("Rate mode"),
                         dcc.Dropdown(
                             id="rate-mode",
                             options=[
@@ -578,9 +694,36 @@ def update_dataset_controls(loaded_dataset: str | None):
 
 
 @app.callback(
+    Output("color-period-wrap", "style"),
+    Output("color-period", "options"),
+    Output("color-period", "value"),
+    Input("loaded-dataset", "data"),
+    Input("color-by", "value"),
+    State("color-period", "value"),
+)
+def update_color_period(loaded_dataset, color_by, current_value):
+    """Populate color-period dropdown from dataset stress periods."""
+    if not loaded_dataset:
+        return {"display": "none"}, [], None
+    if color_by != "flux":
+        return {"display": "none"}, [], None
+    data = load_dataset(loaded_dataset)
+    wel = data["wel"]
+    spd = getattr(wel, "stress_period_data", None)
+    spd_keys = sorted(list(spd.data.keys())) if spd is not None and hasattr(spd, "data") else [0]
+    options = [{"label": f"SP {idx + 1}", "value": idx} for idx in spd_keys]
+    if current_value in spd_keys:
+        value = current_value
+    else:
+        value = spd_keys[0] if spd_keys else None
+    return {"display": "block"}, options, value
+
+
+@app.callback(
     Output("loaded-dataset", "data"),
     Output("dataset-status", "children"),
     Output("load-counter", "data"),
+    Output("last-loaded-dataset", "data"),
     Input("load-dataset", "n_clicks"),
     State("dataset", "value"),
     State("load-counter", "data"),
@@ -598,13 +741,13 @@ def load_selected_dataset(n_clicks, selected_dataset, load_counter):
         Tuple of (loaded dataset, status message, updated counter).
     """
     if not selected_dataset:
-        return None, "No dataset selected.", load_counter
+        return None, "No dataset selected.", load_counter, ""
     try:
         load_dataset(selected_dataset)
     except Exception as exc:
-        return selected_dataset, f"Failed to load dataset: {exc}", load_counter
+        return selected_dataset, f"Failed to load dataset: {exc}", load_counter, selected_dataset
     load_counter = (load_counter or 0) + 1
-    return selected_dataset, f"Loaded dataset: {selected_dataset}", load_counter
+    return selected_dataset, f"Loaded dataset: {selected_dataset}", load_counter, selected_dataset
 
 
 @app.callback(
@@ -718,13 +861,29 @@ def update_category_controls(color_by, loaded_dataset):
         return [], None, {"display": "none"}, True
     data = load_dataset(loaded_dataset)
     gdf = data["gdf"]
-    if color_by not in ("GCD_Name", "PGMA_Name"):
+    if color_by not in ("GCD_Name", "PGMA_Name") or color_by not in gdf.columns:
         return [], None, {"display": "none"}, True
     categories = (
         gdf[color_by].fillna("Unknown").astype(str).drop_duplicates().tolist()
     )
     options = [{"label": value, "value": value} for value in categories]
     return options, None, {"display": "block"}, False
+
+
+@app.callback(
+    Output("periods-summary", "children"),
+    Input("periods", "value"),
+    Input("loaded-dataset", "data"),
+)
+def update_periods_summary(periods, loaded_dataset):
+    """Show the active stress period selection summary."""
+    if not loaded_dataset:
+        return "Stress periods: none"
+    if not periods:
+        return "Stress periods: all"
+    values = sorted(int(p) for p in periods)
+    labels = ", ".join(f"SP {p + 1}" for p in values)
+    return f"Stress periods: {labels}"
 
 
 @app.callback(
@@ -742,7 +901,8 @@ def update_dataset_suggestions(username, jwt_token):
     Returns:
         List of dataset suggestion dicts.
     """
-    return _owned_gam_datasets(username or "", jwt_token or "")
+    options = _suggest_gam_datasets(username or "", jwt_token or "")
+    return [{"label": "New dataset", "value": "__new__"}] + options
 
 
 @app.callback(
@@ -762,7 +922,9 @@ def update_dataset_suggestions(username, jwt_token):
     Input("layers", "value"),
     Input("add-missing", "value"),
     Input("selected-store", "data"),
+    Input("load-counter", "data"),
     State("name-seed", "data"),
+    State("last-loaded-dataset", "data"),
     State("dataset-name", "value"),
     State("output-wel", "value"),
     State("source-url", "value"),
@@ -781,7 +943,9 @@ def suggest_names(
     layers,
     add_missing,
     selected_ids,
+    _load_counter,
     name_seed,
+    last_loaded_dataset,
     current_dataset_name,
     current_output_name,
     current_source_url,
@@ -813,8 +977,11 @@ def suggest_names(
     """
     if not loaded_dataset:
         return current_dataset_name, current_output_name, current_source_url, current_change_summary
-    if suggested_name:
+    triggered = ctx.triggered_id
+    if suggested_name and suggested_name != "__new__":
         current_dataset_name = suggested_name
+    elif triggered in ("loaded-dataset", "load-counter"):
+        current_dataset_name = _slugify(f"{loaded_dataset}-{name_seed}")
     rate_value = float(new_rate or 0.0)
     if rate_mode == "scale_percent":
         if rate_value < 0:
@@ -828,7 +995,7 @@ def suggest_names(
     base_name = _slugify(f"{loaded_dataset}-{name_seed}")
     dataset_name = current_dataset_name or base_name
     output_ext = ".rch" if flux_source == "rch" else ".wel"
-    output_name = current_output_name or f"{loaded_dataset}_{suffix}{output_ext}"
+    output_name = f"{loaded_dataset}_{suffix}{output_ext}"
     if not output_name.lower().endswith(output_ext):
         output_name = f"{Path(output_name).stem}{output_ext}"
     source_url = current_source_url
@@ -838,12 +1005,13 @@ def suggest_names(
             source_url = details.get("url")
             if not source_url:
                 resources = details.get("resources", [])
-                wel_res = next(
-                    (res for res in resources if resource_has_standard_var(res, ckanp.WEL_STANDARD_VAR)),
+                target_var = ckanp.RCH_STANDARD_VAR if flux_source == "rch" else ckanp.WEL_STANDARD_VAR
+                target_res = next(
+                    (res for res in resources if resource_has_standard_var(res, target_var)),
                     None,
                 )
-                if wel_res:
-                    source_url = wel_res.get("url")
+                if target_res:
+                    source_url = target_res.get("url")
         except Exception:
             source_url = current_source_url
     selection_count = len(selected_ids or [])
@@ -851,8 +1019,12 @@ def suggest_names(
     if color_by in ("GCD_Name", "PGMA_Name") and category_value:
         selection_desc = f"Category {color_by} = {category_value}"
     period_desc = "All periods" if not periods else f"Periods: {', '.join(str(p) for p in periods)}"
-    layer_desc = "All layers" if not layers else f"Layers: {', '.join(str(l) for l in layers)}"
-    add_desc = "Add missing wells: yes" if (add_missing or []) else "Add missing wells: no"
+    if flux_source == "rch":
+        layer_desc = "Layers: n/a"
+        add_desc = "Add missing wells: n/a"
+    else:
+        layer_desc = "All layers" if not layers else f"Layers: {', '.join(str(l) for l in layers)}"
+        add_desc = "Add missing wells: yes" if (add_missing or []) else "Add missing wells: no"
     change_summary = (
         f"{selection_desc}; {period_desc}; {layer_desc}; "
         f"Rate mode: {rate_mode}, New rate: {new_rate}; {add_desc}"
@@ -906,7 +1078,7 @@ def update_selection(
             return selected_ids, True
         data = load_dataset(loaded_dataset)
         gdf = data["gdf"]
-        if color_by not in ("GCD_Name", "PGMA_Name"):
+        if color_by not in ("GCD_Name", "PGMA_Name") or color_by not in gdf.columns:
             return selected_ids, False
         matches = gdf[color_by].fillna("Unknown").astype(str) == str(category_value)
         cell_ids = gdf.loc[matches, "CELL_ID"].tolist()
@@ -998,6 +1170,7 @@ def update_output_label(flux_source):
     Input("apply-rate", "n_clicks"),
     State("loaded-dataset", "data"),
     State("selected-store", "data"),
+    State("flux-source", "value"),
     State("new-rate", "value"),
     State("rate-mode", "value"),
     State("add-missing", "value"),
@@ -1015,6 +1188,7 @@ def apply_rate(
     n_clicks,
     loaded_dataset,
     selected_ids,
+    flux_source,
     new_rate,
     rate_mode,
     add_missing,
@@ -1034,6 +1208,7 @@ def apply_rate(
         n_clicks: Click count from the apply button.
         loaded_dataset: CKAN dataset name.
         selected_ids: Selected CELL_ID values.
+        flux_source: ``wel`` or ``rch``.
         new_rate: New rate value.
         rate_mode: ``set`` or ``scale_percent``.
         add_missing: Checkbox values for add-missing.
@@ -1042,7 +1217,7 @@ def apply_rate(
         update_counter: Current update counter.
         jwt_token: CKAN JWT token.
         dataset_name: Output dataset name.
-        output_wel: Output WEL filename.
+        output_wel: Output WEL/RCH filename.
         source_url: Source URL string.
         change_summary: Change summary string.
         tapis_username: Tapis username for maintainer checks.
@@ -1060,39 +1235,69 @@ def apply_rate(
     wel = data["wel"]
     gdf = data["gdf"]
     output_path = Path(output_wel or OUTPUT_WEL)
-    if output_path.suffix.lower() != ".wel":
-        output_path = output_path.with_suffix(".wel")
-    updated = apply_rate_update(
-        wel,
-        gdf,
-        selected_ids,
-        float(new_rate or 0.0),
-        rate_mode,
-        "yes" in (add_missing or []),
-        list(layers or []),
-        list(periods or []),
-        output_path,
-    )
+    target_ext = ".rch" if flux_source == "rch" else ".wel"
+    if output_path.suffix.lower() != target_ext:
+        output_path = output_path.with_suffix(target_ext)
+    if flux_source == "rch":
+        rch = data["rch"]
+        if rch is None:
+            return "RCH data not loaded.", update_counter, True
+        updated = apply_rch_rate_update(
+            rch,
+            gdf,
+            selected_ids,
+            float(new_rate or 0.0),
+            rate_mode,
+            list(periods or []),
+            output_path,
+        )
+    else:
+        updated = apply_rate_update(
+            wel,
+            gdf,
+            selected_ids,
+            float(new_rate or 0.0),
+            rate_mode,
+            "yes" in (add_missing or []),
+            list(layers or []),
+            list(periods or []),
+            output_path,
+        )
     provenance = {
         "selected_cell_count": len(selected_ids),
         "rate_mode": rate_mode,
         "new_rate": float(new_rate or 0.0),
-        "layers": list(layers or []),
         "periods": list(periods or []),
         "change_summary": change_summary or "",
         "source_url": source_url or "",
+        "flux_source": flux_source or "wel",
     }
+    if flux_source != "rch":
+        provenance["layers"] = list(layers or [])
+        provenance["add_missing"] = "yes" in (add_missing or [])
     try:
-        result = ckanp.publish_updated_wel(
-            loaded_dataset,
-            output_path,
-            provenance,
-            jwt_token=jwt_token or None,
-            new_dataset_name=dataset_name or None,
-            source_url=source_url or None,
-            change_summary=change_summary or None,
-            maintainer_username=tapis_username or None,
-        )
+        if flux_source == "rch":
+            result = ckanp.publish_updated_rch(
+                loaded_dataset,
+                output_path,
+                provenance,
+                jwt_token=jwt_token or None,
+                new_dataset_name=dataset_name or None,
+                source_url=source_url or None,
+                change_summary=change_summary or None,
+                maintainer_username=tapis_username or None,
+            )
+        else:
+            result = ckanp.publish_updated_wel(
+                loaded_dataset,
+                output_path,
+                provenance,
+                jwt_token=jwt_token or None,
+                new_dataset_name=dataset_name or None,
+                source_url=source_url or None,
+                change_summary=change_summary or None,
+                maintainer_username=tapis_username or None,
+            )
         dataset_id = result["dataset"].get("id", "")
         return (
             f"Updated {updated} cells. Wrote {output_path}. "
@@ -1138,12 +1343,22 @@ def apply_rate(
     Input("load-counter", "data"),
     Input("flux-source", "value"),
     Input("color-by", "value"),
+    Input("color-period", "value"),
     Input("periods", "value"),
     Input("selected-store", "data"),
     Input("update-store", "data"),
+    Input("map", "relayoutData"),
 )
 def update_map(
-    loaded_dataset, _load_counter, flux_source, color_by, periods, selected_ids, _update
+    loaded_dataset,
+    _load_counter,
+    flux_source,
+    color_by,
+    color_period,
+    periods,
+    selected_ids,
+    _update,
+    relayout,
 ):
     """Refresh the map when dataset or settings change.
 
@@ -1163,14 +1378,26 @@ def update_map(
         return go.Figure()
     data = load_dataset(loaded_dataset)
     gdf = data["gdf"]
+    try:
+        geom_types = gdf.geometry.geom_type.value_counts(dropna=False).to_dict()
+        valid_mask = gdf.geometry.notna()
+        invalid_count = int((~valid_mask).sum())
+        print(f"[grid] geometry types: {geom_types}")
+        print(f"[grid] null geometry rows: {invalid_count}")
+        if valid_mask.any():
+            sample = gdf.loc[valid_mask].geometry.iloc[0]
+            print(f"[grid] sample geometry: {sample}")
+    except Exception as exc:
+        print(f"[grid] geometry debug failed: {exc}")
     wel = data["wel"]
     rch = data["rch"]
     periods = periods or []
-    wel_cells = _collect_wel_cells_for_periods(wel, gdf, periods)
+    map_periods = [color_period] if color_by == "flux" and color_period is not None else periods
+    wel_cells = _collect_wel_cells_for_periods(wel, gdf, map_periods)
     rch_cells = {}
     if rch is not None:
         try:
-            rch_cells = build_rch_cells_for_periods(rch, gdf, periods)
+            rch_cells = build_rch_cells_for_periods(rch, gdf, map_periods)
         except Exception:
             rch_cells = {}
     if flux_source == "rch":
@@ -1181,6 +1408,28 @@ def update_map(
         active_cells = wel_cells
         label = "Well"
         force_linear = False
+    if color_by == "flux":
+        values = [float(v) for v in active_cells.values()]
+        nonzero = [v for v in values if v != 0.0]
+        count = len(values)
+        nz_count = len(nonzero)
+        if nonzero:
+            vmin = min(nonzero)
+            vmax = max(nonzero)
+        else:
+            vmin = vmax = 0.0
+        period_label = (
+            f"SP {int(color_period) + 1}" if color_period is not None else "multi"
+        )
+        print(
+            f"[flux] period={period_label} cells={count} nonzero={nz_count} "
+            f"min={vmin:.6g} max={vmax:.6g}"
+        )
+    zoom = None
+    if isinstance(relayout, dict):
+        zoom = relayout.get("map.zoom")
+        if zoom is None:
+            zoom = relayout.get("mapbox.zoom")
     return _build_map_figure(
         gdf,
         active_cells,
@@ -1188,6 +1437,8 @@ def update_map(
         color_by,
         force_linear,
         selected_ids or [],
+        zoom=zoom,
+        show_grid=False,
     )
 
 

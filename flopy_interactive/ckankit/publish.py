@@ -1,4 +1,4 @@
-"""Publish updated WEL outputs back to CKAN with provenance metadata."""
+"""Publish updated WEL/RCH outputs back to CKAN with provenance metadata."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Optional
 import requests
 from tapipy.tapis import Tapis
 
-from flopy_interactive.config import CKAN_BASE_URL, WEL_STANDARD_VAR
+from flopy_interactive.config import CKAN_BASE_URL, RCH_STANDARD_VAR, WEL_STANDARD_VAR
 from flopy_interactive.ckankit.search import extract_standard_vars, resource_has_standard_var
 
 CKAN_URL = os.environ.get("FLOPY_CKAN_URL", CKAN_BASE_URL)
@@ -102,7 +102,7 @@ def _extract_mint_svo(extras: Iterable[Dict]) -> Optional[str]:
     return None
 
 
-def _resolve_mint_svo(resource: Dict, dataset: Dict) -> Optional[str]:
+def _resolve_mint_svo(resource: Dict, dataset: Dict, target_var: str) -> Optional[str]:
     """Resolve the MINT SVO from resource or dataset metadata.
 
     Args:
@@ -115,14 +115,14 @@ def _resolve_mint_svo(resource: Dict, dataset: Dict) -> Optional[str]:
     mint_svo = _extract_mint_svo(resource.get("extras", []))
     if mint_svo:
         return mint_svo
-    if resource_has_standard_var(resource, WEL_STANDARD_VAR):
-        return WEL_STANDARD_VAR
+    if resource_has_standard_var(resource, target_var):
+        return target_var
     mint_svo = _extract_mint_svo(dataset.get("extras", []))
     if mint_svo:
         return mint_svo
     for value in extract_standard_vars(dataset):
-        if value.strip().lower() == WEL_STANDARD_VAR.lower():
-            return WEL_STANDARD_VAR
+        if value.strip().lower() == target_var.lower():
+            return target_var
     return None
 
 
@@ -236,6 +236,8 @@ def create_resource_upload(
         "description": resource_dict.get("description", ""),
         "format": resource_dict.get("format", file_path.suffix.lstrip(".").upper() or "WEL"),
     }
+    if resource_dict.get("mint_standard_variables"):
+        data["mint_standard_variables"] = resource_dict["mint_standard_variables"]
     extras = resource_dict.get("extras")
     if extras:
         data["extras"] = json.dumps(extras)
@@ -321,6 +323,8 @@ def build_resource_payload(
     mint_svo: str,
     source_url: str | None = None,
     change_summary: str | None = None,
+    default_name: str = "WEL",
+    default_format: str = "WEL",
 ) -> Dict:
     """Create a resource payload derived from a source resource.
 
@@ -354,9 +358,10 @@ def build_resource_payload(
     if change_summary:
         description = f"{description}\nMetadata Description of Changes Made: {change_summary}".strip()
     return {
-        "name": f"{source_resource.get('name', 'WEL')} (updated)",
+        "name": f"{source_resource.get('name', default_name)} (updated)",
         "description": description,
-        "format": source_resource.get("format", "WEL"),
+        "format": source_resource.get("format", default_format),
+        "mint_standard_variables": mint_svo,
         "extras": extras,
     }
 
@@ -395,7 +400,7 @@ def publish_updated_wel(
     )
     if not wel_resource:
         raise RuntimeError("Could not find WEL resource in source dataset.")
-    mint_svo = _resolve_mint_svo(wel_resource, source_dataset)
+    mint_svo = _resolve_mint_svo(wel_resource, source_dataset, WEL_STANDARD_VAR)
     if not mint_svo:
         raise RuntimeError("MINT_SVO missing in source metadata.")
     timestamp = _now_iso()
@@ -451,6 +456,108 @@ def publish_updated_wel(
         mint_svo,
         source_url=source_url,
         change_summary=change_summary,
+    )
+    created_resource = create_resource_upload(
+        jwt_token,
+        dataset_id,
+        output_path,
+        resource_payload,
+    )
+    return {"dataset": existing_dataset, "resource": created_resource}
+
+
+def publish_updated_rch(
+    source_dataset_name: str,
+    output_path: Path,
+    provenance_details: Dict,
+    jwt_token: Optional[str] = None,
+    new_dataset_name: Optional[str] = None,
+    source_url: Optional[str] = None,
+    change_summary: Optional[str] = None,
+    maintainer_username: Optional[str] = None,
+) -> Dict:
+    """Create or update a derived dataset and upload the updated RCH file.
+
+    Args:
+        source_dataset_name: CKAN dataset name for the source.
+        output_path: Path to the updated RCH file.
+        provenance_details: Dict describing the update.
+        jwt_token: Optional JWT token; resolved from env if missing.
+        new_dataset_name: Optional name for derived dataset.
+        source_url: Optional URL to reference in metadata.
+        change_summary: Optional change summary string.
+        maintainer_username: Optional maintainer username for ownership checks.
+
+    Returns:
+        Dict with ``dataset`` and ``resource`` metadata.
+    """
+    jwt_token = jwt_token or get_jwt_token()
+    source_dataset = package_show(jwt_token, source_dataset_name)
+    resources = source_dataset.get("resources", [])
+    rch_resource = next(
+        (res for res in resources if resource_has_standard_var(res, RCH_STANDARD_VAR)),
+        None,
+    )
+    if not rch_resource:
+        raise RuntimeError("Could not find RCH resource in source dataset.")
+    mint_svo = _resolve_mint_svo(rch_resource, source_dataset, RCH_STANDARD_VAR)
+    if not mint_svo:
+        raise RuntimeError("MINT_SVO missing in source metadata.")
+    timestamp = _now_iso()
+    if new_dataset_name:
+        new_name = _slugify(new_dataset_name)
+    else:
+        new_name = _slugify(f"{source_dataset_name}-updated-{timestamp}")
+    provenance = {
+        "timestamp": timestamp,
+        "action": "rch_rate_update",
+        "details": json.dumps(provenance_details, sort_keys=True),
+        "source_dataset_id": source_dataset.get("id", ""),
+        "source_dataset_name": source_dataset_name,
+        "source_resource_id": rch_resource.get("id", ""),
+        "source_resource_name": rch_resource.get("name", ""),
+    }
+    if new_name == source_dataset_name:
+        raise RuntimeError("dataset name conflict with original; choose a new name")
+
+    existing_dataset = None
+    try:
+        existing_dataset = package_show(jwt_token, new_name)
+    except Exception:
+        existing_dataset = None
+
+    if existing_dataset:
+        if maintainer_username:
+            existing_maintainer = str(existing_dataset.get("maintainer", "")).strip().lower()
+            existing_email = str(existing_dataset.get("maintainer_email", "")).strip().lower()
+            maintainer_key = maintainer_username.strip().lower()
+            if existing_maintainer and maintainer_key != existing_maintainer and maintainer_key != existing_email:
+                raise RuntimeError("dataset maintainer mismatch")
+        dataset_id = existing_dataset["id"]
+        dataset_payload = existing_dataset
+    else:
+        dataset_payload = build_dataset_payload(
+            source_dataset,
+            new_name,
+            provenance,
+            mint_svo,
+            source_url=source_url,
+            change_summary=change_summary,
+            maintainer_username=maintainer_username,
+        )
+        dataset_payload["name"] = new_name
+        created_dataset = create_dataset(jwt_token, dataset_payload)
+        dataset_id = created_dataset["id"]
+        existing_dataset = created_dataset
+
+    resource_payload = build_resource_payload(
+        rch_resource,
+        provenance,
+        mint_svo,
+        source_url=source_url,
+        change_summary=change_summary,
+        default_name="RCH",
+        default_format="RCH",
     )
     created_resource = create_resource_upload(
         jwt_token,

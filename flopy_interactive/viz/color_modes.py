@@ -67,6 +67,8 @@ def apply_color_mode(
     cell_ids = gdf["CELL_ID"].tolist()
     flux_values = [float(wel_cells.get(int(cid), 0.0)) for cid in cell_ids]
     diverging = [(0.0, "#2b6cb0"), (0.5, "#ffffff"), (1.0, "#c53030")]
+    has_choropleth = bool(fig.data) and fig.data[0].type.startswith("choropleth")
+    scatter_idx = 1 if has_choropleth else 0
 
     if mode == "flux":
         nonzero = [v for v in flux_values if v != 0.0]
@@ -109,8 +111,9 @@ def apply_color_mode(
             title = flux_label
 
         with fig.batch_update():
-            fig.data[0].update(z=z_vals, zmin=zmin, zmax=zmax, colorscale=diverging)
-            fig.data[1].marker.update(
+            if has_choropleth:
+                fig.data[0].update(z=z_vals, zmin=zmin, zmax=zmax, colorscale=diverging)
+            fig.data[scatter_idx].marker.update(
                 color=z_vals,
                 colorscale=diverging,
                 cmin=zmin,
@@ -143,8 +146,9 @@ def apply_color_mode(
     cmax = max(1, len(labels) - 1)
 
     with fig.batch_update():
-        fig.data[0].update(z=codes, zmin=0.0, zmax=cmax, colorscale=colorscale)
-        fig.data[1].marker.update(
+        if has_choropleth:
+            fig.data[0].update(z=codes, zmin=0.0, zmax=cmax, colorscale=colorscale)
+        fig.data[scatter_idx].marker.update(
             color=codes,
             colorscale=colorscale,
             cmin=0.0,
@@ -175,16 +179,19 @@ def update_flux_customdata(fig: go.FigureWidget, gdf, flux_values: Sequence[floa
     Returns:
         None.
     """
-    fig.data[0].customdata = np.stack(
-        [
-            gdf["CELL_ID"],
-            flux_values,
-            gdf["GCD_Name"].fillna("Unknown").astype(str),
-            gdf["PGMA_Name"].fillna("Unknown").astype(str),
-        ],
-        axis=1,
-    )
-    fig.data[1].customdata = np.stack(
+    has_choropleth = bool(fig.data) and fig.data[0].type.startswith("choropleth")
+    scatter_idx = 1 if has_choropleth else 0
+    if has_choropleth:
+        fig.data[0].customdata = np.stack(
+            [
+                gdf["CELL_ID"],
+                flux_values,
+                gdf["GCD_Name"].fillna("Unknown").astype(str),
+                gdf["PGMA_Name"].fillna("Unknown").astype(str),
+            ],
+            axis=1,
+        )
+    fig.data[scatter_idx].customdata = np.stack(
         [
             gdf["CELL_ID"],
             gdf["ROW"],

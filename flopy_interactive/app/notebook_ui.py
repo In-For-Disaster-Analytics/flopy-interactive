@@ -18,7 +18,12 @@ from flopy_interactive.data.rch import (
     build_rch_cells_for_periods,
     load_rch,
 )
-from flopy_interactive.data.wel import apply_rate_update, collect_wel_cells_for_period_data, load_wel
+from flopy_interactive.data.wel import (
+    apply_rate_update,
+    build_cell_id_lookup,
+    collect_wel_cells_for_period_data,
+    load_wel,
+)
 from flopy_interactive.viz.color_modes import apply_color_mode, update_flux_customdata
 from flopy_interactive.viz.map_widgets import build_plotly_selector
 
@@ -40,15 +45,18 @@ def build_ui(
     Returns:
         ipywidgets container widget.
     """
-    cell_id_lookup = dict(zip(zip(gdf["ROW"], gdf["COL"]), gdf["CELL_ID"]))
+    cell_id_lookup = build_cell_id_lookup(gdf, wel)
 
     def _collect_wel_cells(row_offset: int, col_offset: int) -> Dict[int, float]:
         cells: Dict[int, float] = {}
         for recs in wel.stress_period_data.data.values():
             for rec in recs:
-                row = int(rec["i"]) + row_offset
-                col = int(rec["j"]) + col_offset
-                cell_id = cell_id_lookup.get((row, col))
+                if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+                    cell_id = cell_id_lookup.get(int(rec["node"]))
+                else:
+                    row = int(rec["i"]) + row_offset
+                    col = int(rec["j"]) + col_offset
+                    cell_id = cell_id_lookup.get((row, col))
                 if cell_id is None:
                     continue
                 flux = float(rec["flux"])
@@ -64,11 +72,16 @@ def build_ui(
             wel, cell_id_lookup, period, row_offset, col_offset
         )
 
-    wel_cells = _collect_wel_cells(0, 0)
-    wel_cells_offset = _collect_wel_cells(1, 1)
-    use_offset = len(wel_cells_offset) > len(wel_cells)
-    if use_offset:
-        wel_cells = wel_cells_offset
+    if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+        wel_cells = _collect_wel_cells(0, 0)
+        wel_cells_offset = {}
+        use_offset = False
+    else:
+        wel_cells = _collect_wel_cells(0, 0)
+        wel_cells_offset = _collect_wel_cells(1, 1)
+        use_offset = len(wel_cells_offset) > len(wel_cells)
+        if use_offset:
+            wel_cells = wel_cells_offset
 
     rch_cells: Dict[int, float] = {}
     if rch is not None:
@@ -256,15 +269,21 @@ def build_ui(
                 for cid, flux in period_cells.items():
                     if cid not in wel_cells_all or abs(flux) > abs(wel_cells_all[cid]):
                         wel_cells_all[cid] = flux
-            wel_cells_offset = {}
-            for period in active_periods:
-                period_cells = _collect_wel_cells_for_period(period, 1, 1)
-                for cid, flux in period_cells.items():
-                    if cid not in wel_cells_offset or abs(flux) > abs(wel_cells_offset[cid]):
-                        wel_cells_offset[cid] = flux
+            if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+                wel_cells_offset = {}
+            else:
+                wel_cells_offset = {}
+                for period in active_periods:
+                    period_cells = _collect_wel_cells_for_period(period, 1, 1)
+                    for cid, flux in period_cells.items():
+                        if cid not in wel_cells_offset or abs(flux) > abs(wel_cells_offset[cid]):
+                            wel_cells_offset[cid] = flux
         else:
             wel_cells_all = _collect_wel_cells(0, 0)
-            wel_cells_offset = _collect_wel_cells(1, 1)
+            if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+                wel_cells_offset = {}
+            else:
+                wel_cells_offset = _collect_wel_cells(1, 1)
         use_offset = len(wel_cells_offset) > len(wel_cells_all)
         wel_cells = wel_cells_offset if use_offset else wel_cells_all
         if rch is not None:

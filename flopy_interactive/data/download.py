@@ -8,23 +8,6 @@ from pathlib import Path
 from typing import Dict
 
 
-def _flatten_single_dir(root: Path) -> None:
-    """Collapse a single nested directory into its parent.
-
-    Args:
-        root: Directory to inspect and flatten.
-
-    Returns:
-        None.
-    """
-    children = [p for p in root.iterdir() if p.is_dir()]
-    if len(children) == 1:
-        inner = children[0]
-        for item in inner.iterdir():
-            shutil.move(str(item), root)
-        inner.rmdir()
-
-
 def download_ckan_resource(resource: Dict, dest_dir: Path) -> Path:
     """Download a CKAN resource to a local directory.
 
@@ -66,7 +49,6 @@ def extract_zip(zip_path: Path) -> Path:
     extract_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(extract_dir)
-    _flatten_single_dir(extract_dir)
     return extract_dir
 
 
@@ -80,12 +62,19 @@ def find_grid_data_path(root: Path) -> Path | None:
         Path to the grid data file, or None if not found.
     """
     if root.is_dir():
-        gdbs = list(root.rglob("*.gdb"))
-        if gdbs:
-            return gdbs[0]
-        for ext in (".shp", ".geojson", ".gpkg", ".json"):
-            matches = list(root.rglob(f"*{ext}"))
-            if matches:
-                return matches[0]
+        if (root / "gdb").exists() or list(root.glob("*.gdbtable")):
+            return root
+        for path in root.rglob("*"):
+            if path.suffix.lower() == ".gdb":
+                return path
+        for path in root.rglob("*"):
+            if path.is_dir():
+                if (path / "gdb").exists():
+                    return path
+                if list(path.glob("*.gdbtable")):
+                    return path
+        for path in root.rglob("*"):
+            if path.suffix.lower() in (".shp", ".geojson", ".gpkg", ".json"):
+                return path
         return None
     return root
