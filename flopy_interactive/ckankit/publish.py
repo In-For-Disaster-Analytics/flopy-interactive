@@ -325,6 +325,7 @@ def build_resource_payload(
     change_summary: str | None = None,
     default_name: str = "WEL",
     default_format: str = "WEL",
+    resource_name: str | None = None,
 ) -> Dict:
     """Create a resource payload derived from a source resource.
 
@@ -358,7 +359,7 @@ def build_resource_payload(
     if change_summary:
         description = f"{description}\nMetadata Description of Changes Made: {change_summary}".strip()
     return {
-        "name": f"{source_resource.get('name', default_name)} (updated)",
+        "name": resource_name or f"{source_resource.get('name', default_name)} (updated)",
         "description": description,
         "format": source_resource.get("format", default_format),
         "mint_standard_variables": mint_svo,
@@ -456,6 +457,7 @@ def publish_updated_wel(
         mint_svo,
         source_url=source_url,
         change_summary=change_summary,
+        resource_name=f"{output_path.stem}",
     )
     created_resource = create_resource_upload(
         jwt_token,
@@ -558,6 +560,7 @@ def publish_updated_rch(
         change_summary=change_summary,
         default_name="RCH",
         default_format="RCH",
+        resource_name=f"{output_path.stem}",
     )
     created_resource = create_resource_upload(
         jwt_token,

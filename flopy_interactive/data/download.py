@@ -34,6 +34,21 @@ def download_ckan_resource(resource: Dict, dest_dir: Path) -> Path:
     return dest_path
 
 
+def _flatten_single_dir(root: Path) -> None:
+    """Flatten a single nested directory in place."""
+    if not root.is_dir():
+        return
+    entries = list(root.iterdir())
+    subdirs = [entry for entry in entries if entry.is_dir()]
+    files = [entry for entry in entries if entry.is_file()]
+    if files or len(subdirs) != 1:
+        return
+    nested = subdirs[0]
+    for entry in nested.iterdir():
+        shutil.move(str(entry), root / entry.name)
+    nested.rmdir()
+
+
 def extract_zip(zip_path: Path) -> Path:
     """Extract a zip to a folder alongside the archive.
 

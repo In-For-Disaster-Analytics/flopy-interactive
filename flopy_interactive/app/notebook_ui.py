@@ -22,6 +22,7 @@ from flopy_interactive.data.wel import (
     apply_rate_update,
     build_cell_id_lookup,
     collect_wel_cells_for_period_data,
+    get_wel_period_keys,
     load_wel,
 )
 from flopy_interactive.viz.color_modes import apply_color_mode, update_flux_customdata
@@ -121,9 +122,7 @@ def build_ui(
         value="flux",
         description="Color by",
     )
-    spd_keys = sorted(list(wel.stress_period_data.data.keys()))
-    if not spd_keys:
-        spd_keys = [0]
+    spd_keys = get_wel_period_keys(wel) or [0]
     period_options = [(f"SP {idx + 1}", idx) for idx in spd_keys]
     period_select = widgets.SelectMultiple(
         options=period_options,

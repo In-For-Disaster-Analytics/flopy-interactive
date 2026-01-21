@@ -26,4 +26,4 @@ COPY flopy_wel_map.py /app/dash/
 
 EXPOSE 8050
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8050", "dash_app:server"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8050", "--timeout", "600", "dash_app:server"]

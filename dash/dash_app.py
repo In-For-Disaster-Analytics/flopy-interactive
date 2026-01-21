@@ -8,6 +8,8 @@ import sys
 import uuid
 from pathlib import Path
 import re
+import hashlib
+import json
 from typing import Dict, Iterable, List, Sequence
 
 import dash
@@ -26,7 +28,7 @@ from flopy_interactive.ckankit.search import (
     search_ckan_datasets,
     search_ckan_datasets_wel_rch,
 )
-from flopy_interactive.config import GRID_STANDARD_VAR
+from flopy_interactive.config import CKAN_BASE_URL, GRID_STANDARD_VAR
 from flopy_interactive.data.download import download_ckan_resource
 from flopy_interactive.data.grid import load_grid_resource
 from flopy_interactive.data.rch import apply_rch_rate_update, build_rch_cells_for_periods, load_rch
@@ -34,6 +36,7 @@ from flopy_interactive.data.wel import (
     apply_rate_update,
     build_cell_id_lookup,
     collect_wel_cells_for_period_data,
+    get_wel_period_keys,
     load_wel,
 )
 from flopy_interactive.viz.color_modes import apply_color_mode
@@ -42,6 +45,7 @@ from flopy_interactive.viz.color_modes import apply_color_mode
 DATA_DIR = Path(os.environ.get("FLOPY_DATA_DIR", "ckan_data"))
 OUTPUT_WEL = Path(os.environ.get("FLOPY_OUTPUT_WEL", "barton_springs_updated.wel"))
 SUGGEST_TITLE_FILTER = "Barton Springs Edwards Aquifer"
+CKAN_URL = os.environ.get("FLOPY_CKAN_URL", CKAN_BASE_URL)
 
 
 def get_datasets() -> List[Dict]:
@@ -360,6 +364,22 @@ def _dataset_options_without_grid(datasets: List[Dict]) -> List[Dict[str, str]]:
             continue
         filtered.append({"label": dataset.get("title", name), "value": name})
     return filtered
+
+
+def _summarize_periods(periods: List[int], total: int | None) -> str:
+    """Return a compact stress-period summary string."""
+    if not periods:
+        return f"All periods ({total})" if total else "All periods"
+    unique = sorted({int(p) for p in periods})
+    if total and len(unique) >= total:
+        return f"All periods ({total})"
+    if total and total > 0 and len(unique) / total >= 0.7:
+        return f"Periods: {len(unique)}/{total}"
+    if len(unique) > 1 and unique[-1] - unique[0] + 1 == len(unique):
+        return f"Periods: {unique[0] + 1}-{unique[-1] + 1}"
+    if len(unique) <= 5:
+        return "Periods: " + ", ".join(str(p + 1) for p in unique)
+    return "Periods: " + ", ".join(str(p + 1) for p in unique[:3]) + f" (+{len(unique) - 3} more)"
 
 
 def _downsample_for_choropleth(gdf_valid, gdf_full, zoom: float | None) -> pd.DataFrame:
@@ -685,8 +705,7 @@ def update_dataset_controls(loaded_dataset: str | None):
         return [], []
     data = load_dataset(loaded_dataset)
     wel = data["wel"]
-    spd = wel.stress_period_data.data
-    period_keys = sorted(list(spd.keys())) if spd else [0]
+    period_keys = get_wel_period_keys(wel) or [0]
     period_options = [{"label": f"SP {idx + 1}", "value": idx} for idx in period_keys]
     nlay = data["nlay"]
     layer_options = [{"label": str(layer), "value": layer} for layer in range(1, nlay + 1)]
@@ -709,8 +728,7 @@ def update_color_period(loaded_dataset, color_by, current_value):
         return {"display": "none"}, [], None
     data = load_dataset(loaded_dataset)
     wel = data["wel"]
-    spd = getattr(wel, "stress_period_data", None)
-    spd_keys = sorted(list(spd.data.keys())) if spd is not None and hasattr(spd, "data") else [0]
+    spd_keys = get_wel_period_keys(wel) or [0]
     options = [{"label": f"SP {idx + 1}", "value": idx} for idx in spd_keys]
     if current_value in spd_keys:
         value = current_value
@@ -788,8 +806,7 @@ def update_periods_layers(
         if not period_options or not layer_options:
             data = load_dataset(loaded_dataset)
             wel = data["wel"]
-            spd = wel.stress_period_data.data
-            period_keys = sorted(list(spd.keys())) if spd else [0]
+            period_keys = get_wel_period_keys(wel) or [0]
             period_options = [
                 {"label": f"SP {idx + 1}", "value": idx} for idx in period_keys
             ]
@@ -925,6 +942,7 @@ def update_dataset_suggestions(username, jwt_token):
     Input("load-counter", "data"),
     State("name-seed", "data"),
     State("last-loaded-dataset", "data"),
+    State("periods", "options"),
     State("dataset-name", "value"),
     State("output-wel", "value"),
     State("source-url", "value"),
@@ -946,6 +964,7 @@ def suggest_names(
     _load_counter,
     name_seed,
     last_loaded_dataset,
+    period_options,
     current_dataset_name,
     current_output_name,
     current_source_url,
@@ -992,33 +1011,34 @@ def suggest_names(
             suffix = "0% change"
     else:
         suffix = f"set-{rate_value:.0f}"
-    base_name = _slugify(f"{loaded_dataset}-{name_seed}")
+    period_total = len(period_options or [])
+    period_summary = _summarize_periods(list(periods or []), period_total or None)
+    change_spec = {
+        "flux_source": flux_source,
+        "rate_mode": rate_mode,
+        "new_rate": rate_value,
+        "periods": sorted(list(periods or [])),
+        "layers": sorted(list(layers or [])),
+        "add_missing": bool(add_missing),
+        "selection_count": len(selected_ids or []),
+        "color_by": color_by,
+        "category": category_value,
+    }
+    change_hash = hashlib.sha1(json.dumps(change_spec, sort_keys=True).encode("utf-8")).hexdigest()[:8]
+    base_name = _slugify(f"{loaded_dataset}-{change_hash}")
     dataset_name = current_dataset_name or base_name
     output_ext = ".rch" if flux_source == "rch" else ".wel"
-    output_name = f"{loaded_dataset}_{suffix}{output_ext}"
+    output_name = f"{loaded_dataset}_{suffix}_{change_hash}{output_ext}"
     if not output_name.lower().endswith(output_ext):
         output_name = f"{Path(output_name).stem}{output_ext}"
     source_url = current_source_url
-    if not source_url and jwt_token and loaded_dataset:
-        try:
-            details = ckanp.package_show(jwt_token, loaded_dataset)
-            source_url = details.get("url")
-            if not source_url:
-                resources = details.get("resources", [])
-                target_var = ckanp.RCH_STANDARD_VAR if flux_source == "rch" else ckanp.WEL_STANDARD_VAR
-                target_res = next(
-                    (res for res in resources if resource_has_standard_var(res, target_var)),
-                    None,
-                )
-                if target_res:
-                    source_url = target_res.get("url")
-        except Exception:
-            source_url = current_source_url
+    if not source_url and loaded_dataset:
+        source_url = f"{CKAN_URL}/dataset/{loaded_dataset}"
     selection_count = len(selected_ids or [])
     selection_desc = f"Selected cells: {selection_count}"
     if color_by in ("GCD_Name", "PGMA_Name") and category_value:
         selection_desc = f"Category {color_by} = {category_value}"
-    period_desc = "All periods" if not periods else f"Periods: {', '.join(str(p) for p in periods)}"
+    period_desc = period_summary
     if flux_source == "rch":
         layer_desc = "Layers: n/a"
         add_desc = "Add missing wells: n/a"
@@ -1234,6 +1254,16 @@ def apply_rate(
     data = load_dataset(loaded_dataset)
     wel = data["wel"]
     gdf = data["gdf"]
+    print(
+        "[apply] "
+        f"dataset={loaded_dataset} flux_source={flux_source} "
+        f"rate_mode={rate_mode} new_rate={new_rate} "
+        f"periods={periods} layers={layers} add_missing={add_missing} "
+        f"selected_count={len(selected_ids)} "
+        f"dataset_name={dataset_name} output={output_wel} "
+        f"source_url={source_url} change_summary={change_summary} "
+        f"jwt={'yes' if jwt_token else 'no'}"
+    )
     output_path = Path(output_wel or OUTPUT_WEL)
     target_ext = ".rch" if flux_source == "rch" else ".wel"
     if output_path.suffix.lower() != target_ext:

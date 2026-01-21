@@ -40,6 +40,48 @@ class MfusgWel:
         output_path.write_text("\n".join(lines) + "\n")
 
 
+class LazyMfusgWel(MfusgWel):
+    """Lazy MFUSG WEL reader that loads selected stress periods on demand."""
+
+    is_lazy = True
+
+    def __init__(self, path: Path, header_line: str, index: list, dtype: np.dtype) -> None:
+        super().__init__(header_line, {}, dtype)
+        self.path = path
+        self.index = index
+        self.period_count = len(index)
+
+    def get_period(self, period: int) -> np.recarray:
+        if period < 0 or period >= self.period_count:
+            return np.recarray(0, dtype=self.stress_period_data.dtype)
+        entry = self.index[period]
+        itmp = entry["itmp"]
+        if itmp < 0:
+            return self.get_period(period - 1) if period > 0 else np.recarray(0, dtype=self.stress_period_data.dtype)
+        if itmp == 0:
+            return np.recarray(0, dtype=self.stress_period_data.dtype)
+        records = []
+        with self.path.open() as handle:
+            handle.seek(entry["offset"])
+            for _ in range(itmp):
+                line = _strip_comment(handle.readline())
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                node = int(float(parts[0]))
+                flux = float(parts[1])
+                records.append((node, flux))
+        return np.rec.array(records, dtype=self.stress_period_data.dtype) if records else np.recarray(0, dtype=self.stress_period_data.dtype)
+
+    def load_all(self) -> Dict[int, np.recarray]:
+        spd: Dict[int, np.recarray] = {}
+        for per in range(self.period_count):
+            spd[per] = self.get_period(per)
+        return spd
+
+
 def _strip_comment(line: str) -> str:
     for token in ("#", ";"):
         if token in line:
@@ -102,6 +144,31 @@ def _load_mfusg_wel(wel_path: Path) -> MfusgWel:
     return MfusgWel(header, spd, dtype)
 
 
+def _index_mfusg_wel(wel_path: Path) -> LazyMfusgWel:
+    """Index MFUSG WEL file for lazy period access."""
+    dtype = np.dtype([("node", "i4"), ("flux", "f8")])
+    index = []
+    with wel_path.open() as handle:
+        header = _strip_comment(handle.readline()).rstrip("\n")
+        per = 0
+        while True:
+            line = handle.readline()
+            if not line:
+                break
+            line = _strip_comment(line)
+            if not line:
+                continue
+            tokens = line.split()
+            itmp = int(tokens[0])
+            offset = handle.tell()
+            if itmp > 0:
+                for _ in range(itmp):
+                    handle.readline()
+            index.append({"itmp": itmp, "offset": offset})
+            per += 1
+    return LazyMfusgWel(wel_path, header, index, dtype)
+
+
 def scan_wel_metadata(path: Path) -> Tuple[int, int, int, int]:
     """Scan a MODFLOW WEL file for grid dimensions.
 
@@ -150,7 +217,7 @@ def load_wel(wel_path: Path) -> flopy.modflow.ModflowWel:
         FloPy WEL package.
     """
     if _detect_mfusg_wel(wel_path):
-        return _load_mfusg_wel(wel_path)
+        return _index_mfusg_wel(wel_path)
     nper, nlay, nrow, ncol = scan_wel_metadata(wel_path)
     model = flopy.modflow.Modflow(modelname="wel_read", model_ws=str(wel_path.parent))
     flopy.modflow.ModflowDis(
@@ -194,10 +261,19 @@ def collect_wel_cells_for_period_data(
         Mapping of CELL_ID to flux value.
     """
     cells: Dict[int, float] = {}
-    spd = wel.stress_period_data.data
-    if period not in spd:
-        return cells
-    recs = spd[period]
+    if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+        if hasattr(wel, "get_period"):
+            recs = wel.get_period(period)
+        else:
+            spd = wel.stress_period_data.data
+            if period not in spd:
+                return cells
+            recs = spd[period]
+    else:
+        spd = wel.stress_period_data.data
+        if period not in spd:
+            return cells
+        recs = spd[period]
     for rec in recs:
         if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
             node = int(rec["node"])
@@ -247,6 +323,9 @@ def apply_rate_update(
     if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
         node_lookup = dict(zip(gdf["CELL_ID"], gdf["NODE_NUM"]))
         selected_cells = {int(node_lookup[cid]) for cid in selected_ids if cid in node_lookup}
+        if hasattr(wel, "load_all"):
+            spd = wel.load_all()
+            wel.stress_period_data.data = spd
     else:
         cell_lookup = dict(zip(gdf["CELL_ID"], zip(gdf["ROW"], gdf["COL"])))
         selected_cells = {cell_lookup[cid] for cid in selected_ids if cid in cell_lookup}
@@ -310,3 +389,13 @@ def apply_rate_update(
                 updated_spd[per] = np.rec.array(recs, dtype=base_dtype)
     wel.write_file(str(output_path))
     return len(selected_cells)
+
+
+def get_wel_period_keys(wel) -> list[int]:
+    """Return stress period indices for WEL, including lazy MFUSG."""
+    if hasattr(wel, "period_count"):
+        return list(range(int(wel.period_count)))
+    spd = getattr(wel, "stress_period_data", None)
+    if spd is not None and hasattr(spd, "data"):
+        return sorted(list(spd.data.keys()))
+    return []
