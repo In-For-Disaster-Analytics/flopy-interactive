@@ -387,7 +387,10 @@ def apply_rate_update(
                 updated_spd[per] = np.recarray(0, dtype=base_dtype)
             else:
                 updated_spd[per] = np.rec.array(recs, dtype=base_dtype)
-    wel.write_file(str(output_path))
+    if hasattr(wel, "is_mfusg") and getattr(wel, "is_mfusg"):
+        wel.write_file(output_path)
+    else:
+        wel.write_file(str(output_path))
     return len(selected_cells)
 
 

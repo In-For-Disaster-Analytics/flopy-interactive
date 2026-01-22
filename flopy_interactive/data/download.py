@@ -7,6 +7,8 @@ import zipfile
 from pathlib import Path
 from typing import Dict
 
+from flopy_interactive.utils.perf import perf_note, perf_timer
+
 
 def download_ckan_resource(resource: Dict, dest_dir: Path) -> Path:
     """Download a CKAN resource to a local directory.
@@ -27,10 +29,12 @@ def download_ckan_resource(resource: Dict, dest_dir: Path) -> Path:
         filename = resource.get("name") or resource.get("id") or "resource"
     dest_path = dest_dir / filename
     if dest_path.exists():
+        perf_note(f"download_ckan_resource cache hit: {dest_path.name}")
         return dest_path
     from urllib.request import urlretrieve
 
-    urlretrieve(url, dest_path)
+    with perf_timer(f"download_ckan_resource:{dest_path.name}"):
+        urlretrieve(url, dest_path)
     return dest_path
 
 
@@ -60,10 +64,12 @@ def extract_zip(zip_path: Path) -> Path:
     """
     extract_dir = zip_path.with_suffix("")
     if extract_dir.exists():
+        perf_note(f"extract_zip cache hit: {extract_dir.name}")
         return extract_dir
     extract_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(extract_dir)
+    with perf_timer(f"extract_zip:{zip_path.name}"):
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_dir)
     return extract_dir
 
 

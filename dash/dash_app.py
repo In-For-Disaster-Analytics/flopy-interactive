@@ -39,6 +39,7 @@ from flopy_interactive.data.wel import (
     get_wel_period_keys,
     load_wel,
 )
+from flopy_interactive.utils.perf import perf_call, perf_note, perf_timer
 from flopy_interactive.viz.color_modes import apply_color_mode
 
 
@@ -46,6 +47,9 @@ DATA_DIR = Path(os.environ.get("FLOPY_DATA_DIR", "ckan_data"))
 OUTPUT_WEL = Path(os.environ.get("FLOPY_OUTPUT_WEL", "barton_springs_updated.wel"))
 SUGGEST_TITLE_FILTER = "Barton Springs Edwards Aquifer"
 CKAN_URL = os.environ.get("FLOPY_CKAN_URL", CKAN_BASE_URL)
+
+_DATASET_CACHE: Dict[str, Dict] = {}
+_MAP_FIG_CACHE: Dict[tuple, go.Figure] = {}
 
 
 def get_datasets() -> List[Dict]:
@@ -57,7 +61,7 @@ def get_datasets() -> List[Dict]:
     Returns:
         List of dataset metadata dicts.
     """
-    return search_ckan_datasets()
+    return perf_call("search_ckan_datasets", search_ckan_datasets)
 
 
 def _get_dataset_or_none(name: str | None) -> Dict | None:
@@ -87,6 +91,10 @@ def load_dataset(name: str) -> Dict:
     Returns:
         Dict with dataset, gdf, wel, rch, lookup, and nlay.
     """
+    cached = _DATASET_CACHE.get(name)
+    if cached is not None:
+        perf_note(f"load_dataset cache hit: {name}")
+        return cached
     dataset = _get_dataset_or_none(name)
     if not dataset:
         raise ValueError(f"Dataset not found: {name}")
@@ -96,8 +104,8 @@ def load_dataset(name: str) -> Dict:
     rch_resource = dataset["matches"]["rch"][0]
     wel_path = download_ckan_resource(wel_resource, base_dir / "wel")
     rch_path = download_ckan_resource(rch_resource, base_dir / "rch")
-    gdf = load_grid_resource(grid_resource, base_dir / "grid")
-    wel = load_wel(wel_path)
+    gdf = perf_call(f"load_grid_resource:{name}", load_grid_resource, grid_resource, base_dir / "grid")
+    wel = perf_call(f"load_wel:{name}", load_wel, wel_path)
     nrow = int(gdf["ROW"].max())
     ncol = int(gdf["COL"].max())
     try:
@@ -107,10 +115,10 @@ def load_dataset(name: str) -> Dict:
             keys = list(spd.data.keys())
             if keys:
                 nper = int(max(keys)) + 1
-        rch = load_rch(rch_path, nrow=nrow, ncol=ncol, nper=nper)
+        rch = perf_call(f"load_rch:{name}", load_rch, rch_path, nrow=nrow, ncol=ncol, nper=nper)
     except Exception:
         rch = None
-    cell_id_lookup = build_cell_id_lookup(gdf, wel)
+    cell_id_lookup = perf_call(f"build_cell_id_lookup:{name}", build_cell_id_lookup, gdf, wel)
     nlay = 1
     if hasattr(wel, "parent") and wel.parent is not None:
         nlay = int(getattr(wel.parent.dis, "nlay", 1))
@@ -118,7 +126,7 @@ def load_dataset(name: str) -> Dict:
         nlay = int(getattr(wel.model.dis, "nlay", 1))
     elif hasattr(wel, "_model") and wel._model is not None:
         nlay = int(getattr(wel._model.dis, "nlay", 1))
-    return {
+    data = {
         "dataset": dataset,
         "gdf": gdf,
         "wel": wel,
@@ -126,6 +134,8 @@ def load_dataset(name: str) -> Dict:
         "cell_id_lookup": cell_id_lookup,
         "nlay": nlay,
     }
+    _DATASET_CACHE[name] = data
+    return data
 
 
 def _collect_wel_cells_for_periods(
@@ -191,8 +201,10 @@ def _build_map_figure(
     """
     gdf_map = gdf[["CELL_ID", "ROW", "COL", "geometry"]].copy()
     gdf_valid = gdf_map[gdf_map["geometry"].notna()].copy()
-    gdf_choro = _downsample_for_choropleth(gdf_valid, gdf, zoom)
-    grid_geojson = gdf_choro.set_index("CELL_ID").__geo_interface__
+    with perf_timer("downsample_for_choropleth"):
+        gdf_choro = _downsample_for_choropleth(gdf_valid, gdf, zoom)
+    with perf_timer("build_geojson"):
+        grid_geojson = gdf_choro.set_index("CELL_ID").__geo_interface__
     center_lat = float(gdf["_lat"].median())
     center_lon = float(gdf["_lon"].median())
 
@@ -305,15 +317,16 @@ def _build_map_figure(
     )
 
     color_gdf = gdf if show_grid else gdf_scatter
-    apply_color_mode(
-        fig,
-        color_gdf,
-        cells,
-        color_by,
-        normalize=False,
-        flux_label=flux_label,
-        force_linear=force_linear,
-    )
+    with perf_timer("apply_color_mode"):
+        apply_color_mode(
+            fig,
+            color_gdf,
+            cells,
+            color_by,
+            normalize=False,
+            flux_label=flux_label,
+            force_linear=force_linear,
+        )
 
     selected_ids = {int(cid) for cid in selected_ids}
     if selected_ids and len(fig.data) > 2:
@@ -332,6 +345,18 @@ def _build_map_figure(
         ),
     )
     return fig
+
+
+def _apply_selection(fig: go.Figure, gdf, selected_ids: Iterable[int]) -> None:
+    """Apply selected cell overlay to an existing figure."""
+    if not fig.data or len(fig.data) <= 2:
+        return
+    selected_set = {int(cid) for cid in (selected_ids or [])}
+    if not selected_set:
+        fig.data[2].update(lon=[], lat=[])
+        return
+    selected_rows = gdf[gdf["CELL_ID"].isin(selected_set)]
+    fig.data[2].update(lon=selected_rows["_lon"], lat=selected_rows["_lat"])
 
 
 def _dataset_options() -> List[Dict[str, str]]:
@@ -485,7 +510,7 @@ app.layout = html.Div(
         dcc.Store(id="update-store", data=0),
         dcc.Store(id="loaded-dataset", data=default_dataset),
         dcc.Store(id="load-counter", data=0),
-        dcc.Store(id="ckan-jwt", data=""),
+        dcc.Store(id="ckan-jwt", data=os.environ.get("FLOPY_CKAN_JWT", "").strip()),
         dcc.Store(id="login-message", data=""),
         dcc.Store(id="tapis-username", data=""),
         dcc.Store(id="name-seed", data=str(uuid.uuid4())),
@@ -627,6 +652,13 @@ app.layout = html.Div(
                             id="add-missing",
                             options=[{"label": "Add missing wells", "value": "yes"}],
                             value=[],
+                        ),
+                        html.Label("Dataset title"),
+                        dcc.Input(
+                            id="dataset-title",
+                            type="text",
+                            placeholder="Optional display title",
+                            className="login-input",
                         ),
                         html.Label("New dataset name"),
                         dcc.Dropdown(
@@ -857,6 +889,15 @@ def login_ckan(n_clicks, username, password):
 
 
 @app.callback(
+    Output("apply-rate", "disabled"),
+    Input("ckan-jwt", "data"),
+)
+def toggle_apply_rate(jwt_token):
+    """Enable Apply + Save only when authenticated."""
+    return not bool(jwt_token)
+
+
+@app.callback(
     Output("category-select", "options"),
     Output("category-select", "value"),
     Output("category-wrap", "style"),
@@ -927,6 +968,7 @@ def update_dataset_suggestions(username, jwt_token):
     Output("output-wel", "value"),
     Output("source-url", "value"),
     Output("change-summary", "value"),
+    Output("dataset-title", "value"),
     Input("loaded-dataset", "data"),
     Input("flux-source", "value"),
     Input("rate-mode", "value"),
@@ -947,6 +989,7 @@ def update_dataset_suggestions(username, jwt_token):
     State("output-wel", "value"),
     State("source-url", "value"),
     State("change-summary", "value"),
+    State("dataset-title", "value"),
 )
 def suggest_names(
     loaded_dataset,
@@ -969,6 +1012,7 @@ def suggest_names(
     current_output_name,
     current_source_url,
     current_change_summary,
+    current_dataset_title,
 ):
     """Generate dataset/output names and change summary from UI state.
 
@@ -992,10 +1036,16 @@ def suggest_names(
         current_change_summary: Current change summary input.
 
     Returns:
-        Tuple of (dataset name, output filename, source URL, change summary).
+        Tuple of (dataset name, output filename, source URL, change summary, dataset title).
     """
     if not loaded_dataset:
-        return current_dataset_name, current_output_name, current_source_url, current_change_summary
+        return (
+            current_dataset_name,
+            current_output_name,
+            current_source_url,
+            current_change_summary,
+            current_dataset_title,
+        )
     triggered = ctx.triggered_id
     if suggested_name and suggested_name != "__new__":
         current_dataset_name = suggested_name
@@ -1049,7 +1099,18 @@ def suggest_names(
         f"{selection_desc}; {period_desc}; {layer_desc}; "
         f"Rate mode: {rate_mode}, New rate: {new_rate}; {add_desc}"
     )
-    return dataset_name, output_name, source_url, change_summary
+    dataset_title = current_dataset_title or ""
+    if triggered in ("loaded-dataset", "load-counter", "dataset-suggestions") or not dataset_title.strip():
+        if loaded_dataset == "gam-carrizo-wilcox-aquifer-central-portion-version-3-02":
+            dataset_title = f"Carrizo-Wilcox (v3.02) – updated-{name_seed}"
+        else:
+            dataset_title = (current_dataset_name or dataset_name or "").strip()
+            if not dataset_title and loaded_dataset:
+                try:
+                    dataset_title = str(load_dataset(loaded_dataset)["dataset"].get("title") or "").strip()
+                except Exception:
+                    dataset_title = ""
+    return dataset_name, output_name, source_url, change_summary, dataset_title
 
 
 @app.callback(
@@ -1199,6 +1260,7 @@ def update_output_label(flux_source):
     State("update-store", "data"),
     State("ckan-jwt", "data"),
     State("dataset-name", "value"),
+    State("dataset-title", "value"),
     State("output-wel", "value"),
     State("source-url", "value"),
     State("change-summary", "value"),
@@ -1217,6 +1279,7 @@ def apply_rate(
     update_counter,
     jwt_token,
     dataset_name,
+    dataset_title,
     output_wel,
     source_url,
     change_summary,
@@ -1237,6 +1300,7 @@ def apply_rate(
         update_counter: Current update counter.
         jwt_token: CKAN JWT token.
         dataset_name: Output dataset name.
+        dataset_title: Output dataset title.
         output_wel: Output WEL/RCH filename.
         source_url: Source URL string.
         change_summary: Change summary string.
@@ -1313,6 +1377,7 @@ def apply_rate(
                 provenance,
                 jwt_token=jwt_token or None,
                 new_dataset_name=dataset_name or None,
+                new_dataset_title=dataset_title or None,
                 source_url=source_url or None,
                 change_summary=change_summary or None,
                 maintainer_username=tapis_username or None,
@@ -1324,6 +1389,7 @@ def apply_rate(
                 provenance,
                 jwt_token=jwt_token or None,
                 new_dataset_name=dataset_name or None,
+                new_dataset_title=dataset_title or None,
                 source_url=source_url or None,
                 change_summary=change_summary or None,
                 maintainer_username=tapis_username or None,
@@ -1419,6 +1485,25 @@ def update_map(
             print(f"[grid] sample geometry: {sample}")
     except Exception as exc:
         print(f"[grid] geometry debug failed: {exc}")
+    zoom = None
+    if isinstance(relayout, dict):
+        zoom = relayout.get("map.zoom")
+        if zoom is None:
+            zoom = relayout.get("mapbox.zoom")
+    cache_key = (
+        loaded_dataset,
+        flux_source,
+        color_by,
+        int(color_period) if color_period is not None else None,
+        tuple(int(p) for p in (periods or [])),
+        float(zoom) if zoom is not None else None,
+        int(_update or 0),
+    )
+    cached_fig = _MAP_FIG_CACHE.get(cache_key)
+    if cached_fig is not None:
+        fig = go.Figure(cached_fig)
+        _apply_selection(fig, gdf, selected_ids)
+        return fig
     wel = data["wel"]
     rch = data["rch"]
     periods = periods or []
@@ -1455,21 +1540,19 @@ def update_map(
             f"[flux] period={period_label} cells={count} nonzero={nz_count} "
             f"min={vmin:.6g} max={vmax:.6g}"
         )
-    zoom = None
-    if isinstance(relayout, dict):
-        zoom = relayout.get("map.zoom")
-        if zoom is None:
-            zoom = relayout.get("mapbox.zoom")
-    return _build_map_figure(
+    fig = _build_map_figure(
         gdf,
         active_cells,
         label,
         color_by,
         force_linear,
-        selected_ids or [],
+        [],
         zoom=zoom,
         show_grid=False,
     )
+    _MAP_FIG_CACHE[cache_key] = fig
+    _apply_selection(fig, gdf, selected_ids)
+    return fig
 
 
 if __name__ == "__main__":

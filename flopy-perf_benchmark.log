@@ -1,0 +1,311 @@
+[2026-01-21 19:14:28 +0000] [1] [INFO] Starting gunicorn 22.0.0
+[2026-01-21 19:14:28 +0000] [1] [INFO] Listening at: http://0.0.0.0:8050 (1)
+[2026-01-21 19:14:28 +0000] [1] [INFO] Using worker: sync
+[2026-01-21 19:14:28 +0000] [7] [INFO] Booting worker with pid: 7
+[perf] search_ckan_datasets: 772.9ms
+[perf] search_ckan_datasets: 1258.0ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 9897.2ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1178.8ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1719.4ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 40.0ms
+[perf] search_ckan_datasets: 943.2ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 7330.2ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 741.4ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1161.0ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 42.2ms
+[perf] search_ckan_datasets: 951.7ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 6914.2ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 805.1ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1241.9ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 40.9ms
+[perf] search_ckan_datasets: 667.2ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 7094.1ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 739.7ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1115.7ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 42.2ms
+[perf] search_ckan_datasets: 699.5ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 6908.1ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 766.5ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1130.7ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 45.5ms
+[perf] search_ckan_datasets: 1268.5ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 6895.8ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 795.7ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1151.1ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 41.9ms
+[perf] downsample_for_choropleth: 90.0ms
+[perf] build_geojson: 6.6ms
+[perf] apply_color_mode: 928.6ms
+[perf] search_ckan_datasets: 677.6ms
+[perf] search_ckan_datasets: 953.3ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 6748.0ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 744.8ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1265.1ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 41.6ms
+[perf] search_ckan_datasets: 966.2ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 6979.0ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 752.1ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1117.8ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 41.0ms
+[perf] downsample_for_choropleth: 87.8ms
+[perf] build_geojson: 6.2ms
+[perf] apply_color_mode: 561.8ms
+[perf] search_ckan_datasets: 997.7ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 8536.1ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 785.7ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1445.8ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 71.2ms
+[perf] search_ckan_datasets: 971.4ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 7482.0ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 786.3ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1199.7ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 41.7ms
+[perf] downsample_for_choropleth: 84.3ms
+[perf] build_geojson: 5.8ms
+[perf] apply_color_mode: 513.5ms
+[perf] search_ckan_datasets: 942.1ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 8147.3ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 829.1ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1265.0ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 42.2ms
+[perf] downsample_for_choropleth: 124.4ms
+[perf] build_geojson: 7.8ms
+[perf] apply_color_mode: 272.9ms
+[perf] search_ckan_datasets: 1113.2ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 7489.3ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 756.2ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1238.8ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 42.5ms
+[2026-01-21 19:17:24,960] ERROR in app: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/dash/dash.py", line 1376, in dispatch
+    ctx.run(
+  File "/usr/local/lib/python3.11/site-packages/dash/_callback.py", line 507, in add_context
+    raise err
+  File "/usr/local/lib/python3.11/site-packages/dash/_callback.py", line 496, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/dash/_callback.py", line 43, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/dash/dash_app.py", line 1289, in apply_rate
+    updated = apply_rate_update(
+              ^^^^^^^^^^^^^^^^^^
+  File "/app/flopy_interactive/data/wel.py", line 390, in apply_rate_update
+    wel.write_file(str(output_path))
+  File "/app/flopy_interactive/data/wel.py", line 40, in write_file
+    output_path.write_text("\n".join(lines) + "\n")
+    ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'write_text'
+[perf] search_ckan_datasets: 1069.2ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 7040.8ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 811.6ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1160.9ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 42.4ms
+[2026-01-21 19:18:50,138] ERROR in app: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 882, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/dash/dash.py", line 1376, in dispatch
+    ctx.run(
+  File "/usr/local/lib/python3.11/site-packages/dash/_callback.py", line 507, in add_context
+    raise err
+  File "/usr/local/lib/python3.11/site-packages/dash/_callback.py", line 496, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/dash/_callback.py", line 43, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/dash/dash_app.py", line 1289, in apply_rate
+    updated = apply_rate_update(
+              ^^^^^^^^^^^^^^^^^^
+  File "/app/flopy_interactive/data/wel.py", line 390, in apply_rate_update
+    wel.write_file(str(output_path))
+  File "/app/flopy_interactive/data/wel.py", line 40, in write_file
+    output_path.write_text("\n".join(lines) + "\n")
+    ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'write_text'
+[perf] search_ckan_datasets: 1238.8ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 7690.1ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 783.2ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1191.5ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 41.3ms
+[2026-01-21 19:20:32 +0000] [1] [INFO] Handling signal: int
+[2026-01-21 19:20:32 +0000] [7] [ERROR] Error handling request /_dash-update-component
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/gunicorn/workers/sync.py", line 135, in handle
+    self.handle_request(listener, req, client, addr)
+  File "/usr/local/lib/python3.11/site-packages/gunicorn/workers/sync.py", line 178, in handle_request
+    respiter = self.wsgi(environ, resp.start_response)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1498, in __call__
+    return self.wsgi_app(environ, start_response)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 1473, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 880, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/flask/app.py", line 865, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/dash/dash.py", line 1376, in dispatch
+    ctx.run(
+  File "/usr/local/lib/python3.11/site-packages/dash/_callback.py", line 496, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/dash/_callback.py", line 43, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/dash/dash_app.py", line 1289, in apply_rate
+    updated = apply_rate_update(
+              ^^^^^^^^^^^^^^^^^^
+  File "/app/flopy_interactive/data/wel.py", line 342, in apply_rate_update
+    mask = np.array([int(rec["node"]) in selected_cells for rec in recs], dtype=bool)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/flopy_interactive/data/wel.py", line 342, in <listcomp>
+    mask = np.array([int(rec["node"]) in selected_cells for rec in recs], dtype=bool)
+                         ~~~^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/numpy/_core/records.py", line 255, in __getitem__
+    obj = nt.void.__getitem__(self, indx)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/gunicorn/workers/base.py", line 198, in handle_quit
+    sys.exit(0)
+SystemExit: 0
+[2026-01-21 19:20:32 +0000] [7] [INFO] Worker exiting (pid: 7)
+[2026-01-21 19:20:33 +0000] [1] [INFO] Shutting down: Master

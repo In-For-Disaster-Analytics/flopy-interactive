@@ -1,0 +1,103 @@
+[2026-01-21 22:40:08 +0000] [1] [INFO] Starting gunicorn 22.0.0
+[2026-01-21 22:40:08 +0000] [1] [INFO] Listening at: http://0.0.0.0:8050 (1)
+[2026-01-21 22:40:08 +0000] [1] [INFO] Using worker: sync
+[2026-01-21 22:40:08 +0000] [7] [INFO] Booting worker with pid: 7
+[perf] search_ckan_datasets: 763.7ms
+[perf] search_ckan_datasets: 672.6ms
+[perf] download_ckan_resource cache hit: gma12.wel
+[perf] download_ckan_resource cache hit: gma12.rch
+[perf] download_ckan_resource cache hit: czwx_v3_02_mfusg_modelgrid.zip
+[perf] extract_zip cache hit: czwx_v3_02_mfusg_modelgrid
+[perf] load_grid_resource:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 7071.1ms
+[perf] load_wel:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 782.5ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_rch:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 1148.3ms
+[perf] build_cell_id_lookup:gam-carrizo-wilcox-aquifer-central-portion-version-3-02: 38.8ms
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] downsample_for_choropleth: 88.9ms
+[perf] build_geojson: 6.8ms
+[perf] apply_color_mode: 543.0ms
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] downsample_for_choropleth: 130.6ms
+[perf] build_geojson: 9.7ms
+[perf] apply_color_mode: 831.1ms
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] downsample_for_choropleth: 88.6ms
+[perf] build_geojson: 6.1ms
+[perf] apply_color_mode: 893.8ms
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] downsample_for_choropleth: 118.2ms
+[perf] build_geojson: 7.5ms
+[perf] apply_color_mode: 325.7ms
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] downsample_for_choropleth: 90.0ms
+[perf] build_geojson: 6.7ms
+[perf] apply_color_mode: 377.7ms
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] search_ckan_datasets: 654.1ms
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] load_dataset cache hit: gam-carrizo-wilcox-aquifer-central-portion-version-3-02
+[perf] downsample_for_choropleth: 106.2ms
+[perf] build_geojson: 5.9ms
+[perf] apply_color_mode: 308.8ms
+[perf] search_ckan_datasets: 717.3ms
+[perf] download_ckan_resource cache hit: barton_springs_2001_2010average.wel
+[perf] download_ckan_resource cache hit: barton_springs_2001_2010average.rch
+[perf] download_ckan_resource cache hit: ebfz_b_grid.zip
+[perf] extract_zip cache hit: ebfz_b_grid
+[perf] load_grid_resource:barton-springs-gam: 727.2ms
+/usr/local/lib/python3.11/site-packages/flopy/mbase.py:96: UserWarning:
+
+The program mf2005 does not exist or is not executable.
+
+[perf] load_wel:barton-springs-gam: 2872.0ms
+[perf] load_rch:barton-springs-gam: 298.3ms
+[perf] build_cell_id_lookup:barton-springs-gam: 4.9ms
+[perf] load_dataset cache hit: barton-springs-gam
+[perf] load_dataset cache hit: barton-springs-gam
+[perf] load_dataset cache hit: barton-springs-gam
+[perf] downsample_for_choropleth: 7.3ms
+[perf] build_geojson: 2.9ms
+[perf] apply_color_mode: 14.4ms
+[2026-01-21 23:31:46 +0000] [1] [CRITICAL] WORKER TIMEOUT (pid:7)
+[2026-01-21 23:31:46 +0000] [7] [INFO] Worker exiting (pid: 7)
+[2026-01-21 23:31:48 +0000] [1] [ERROR] Worker (pid:7) was sent SIGKILL! Perhaps out of memory?
+[2026-01-21 23:31:48 +0000] [25] [INFO] Booting worker with pid: 25
+[perf] search_ckan_datasets: 750.9ms
+[2026-01-21 23:52:42 +0000] [1] [CRITICAL] WORKER TIMEOUT (pid:25)
+[2026-01-21 23:52:42 +0000] [25] [INFO] Worker exiting (pid: 25)
+[2026-01-21 23:52:43 +0000] [1] [ERROR] Worker (pid:25) exited with code 1
+[2026-01-21 23:52:43 +0000] [1] [ERROR] Worker (pid:25) exited with code 1.
+[2026-01-21 23:52:43 +0000] [41] [INFO] Booting worker with pid: 41
+[perf] search_ckan_datasets: 898.5ms
+[2026-01-22 01:54:21 +0000] [1] [CRITICAL] WORKER TIMEOUT (pid:41)
+[2026-01-22 01:54:21 +0000] [41] [INFO] Worker exiting (pid: 41)
+[2026-01-22 01:54:22 +0000] [1] [ERROR] Worker (pid:41) exited with code 1
+[2026-01-22 01:54:22 +0000] [1] [ERROR] Worker (pid:41) exited with code 1.
+[2026-01-22 01:54:22 +0000] [57] [INFO] Booting worker with pid: 57
+[perf] search_ckan_datasets: 708.3ms
+[2026-01-22 02:54:24 +0000] [1] [CRITICAL] WORKER TIMEOUT (pid:57)
+[2026-01-22 02:54:25 +0000] [57] [INFO] Worker exiting (pid: 57)
+[2026-01-22 02:54:25 +0000] [1] [ERROR] Worker (pid:57) exited with code 1
+[2026-01-22 02:54:25 +0000] [1] [ERROR] Worker (pid:57) exited with code 1.
+[2026-01-22 02:54:25 +0000] [73] [INFO] Booting worker with pid: 73
+[perf] search_ckan_datasets: 718.7ms
+[2026-01-22 14:57:46 +0000] [1] [INFO] Handling signal: hup
+[2026-01-22 14:57:46 +0000] [1] [INFO] Hang up: Master
+[2026-01-22 14:57:47 +0000] [1] [INFO] Handling signal: hup
+[2026-01-22 14:57:47 +0000] [1] [INFO] Hang up: Master
+[2026-01-22 14:57:47 +0000] [89] [INFO] Booting worker with pid: 89
+[2026-01-22 14:57:47 +0000] [90] [INFO] Booting worker with pid: 90
+[2026-01-22 14:57:47 +0000] [73] [INFO] Worker exiting (pid: 73)
+[2026-01-22 14:57:48 +0000] [1] [ERROR] Worker (pid:73) was sent SIGTERM!

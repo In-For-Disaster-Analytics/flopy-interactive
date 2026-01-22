@@ -259,6 +259,7 @@ def build_dataset_payload(
     source_url: str | None = None,
     change_summary: str | None = None,
     maintainer_username: str | None = None,
+    new_title: str | None = None,
 ) -> Dict:
     """Create a dataset payload derived from a source dataset.
 
@@ -293,7 +294,10 @@ def build_dataset_payload(
     ]
     dataset: Dict = {field: source_dataset.get(field) for field in copy_fields if source_dataset.get(field) is not None}
     dataset["name"] = new_name
-    dataset["title"] = f"{source_dataset.get('title', new_name)} (updated {_now_iso()})"
+    if new_title:
+        dataset["title"] = new_title.strip()
+    else:
+        dataset["title"] = f"{source_dataset.get('title', new_name)} (updated {_now_iso()})"
     dataset["tags"] = [{"name": t["name"]} for t in source_dataset.get("tags", []) if isinstance(t, dict) and t.get("name")]
     extras = source_dataset.get("extras", [])
     extras = _merge_extras(
@@ -373,6 +377,7 @@ def publish_updated_wel(
     provenance_details: Dict,
     jwt_token: Optional[str] = None,
     new_dataset_name: Optional[str] = None,
+    new_dataset_title: Optional[str] = None,
     source_url: Optional[str] = None,
     change_summary: Optional[str] = None,
     maintainer_username: Optional[str] = None,
@@ -385,6 +390,7 @@ def publish_updated_wel(
         provenance_details: Dict describing the update.
         jwt_token: Optional JWT token; resolved from env if missing.
         new_dataset_name: Optional name for derived dataset.
+        new_dataset_title: Optional title for derived dataset.
         source_url: Optional URL to reference in metadata.
         change_summary: Optional change summary string.
         maintainer_username: Optional maintainer username for ownership checks.
@@ -445,6 +451,7 @@ def publish_updated_wel(
             source_url=source_url,
             change_summary=change_summary,
             maintainer_username=maintainer_username,
+            new_title=new_dataset_title,
         )
         dataset_payload["name"] = new_name
         created_dataset = create_dataset(jwt_token, dataset_payload)
@@ -474,6 +481,7 @@ def publish_updated_rch(
     provenance_details: Dict,
     jwt_token: Optional[str] = None,
     new_dataset_name: Optional[str] = None,
+    new_dataset_title: Optional[str] = None,
     source_url: Optional[str] = None,
     change_summary: Optional[str] = None,
     maintainer_username: Optional[str] = None,
@@ -486,6 +494,7 @@ def publish_updated_rch(
         provenance_details: Dict describing the update.
         jwt_token: Optional JWT token; resolved from env if missing.
         new_dataset_name: Optional name for derived dataset.
+        new_dataset_title: Optional title for derived dataset.
         source_url: Optional URL to reference in metadata.
         change_summary: Optional change summary string.
         maintainer_username: Optional maintainer username for ownership checks.
@@ -546,6 +555,7 @@ def publish_updated_rch(
             source_url=source_url,
             change_summary=change_summary,
             maintainer_username=maintainer_username,
+            new_title=new_dataset_title,
         )
         dataset_payload["name"] = new_name
         created_dataset = create_dataset(jwt_token, dataset_payload)
