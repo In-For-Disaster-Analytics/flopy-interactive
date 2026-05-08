@@ -101,3 +101,8 @@ The program mf2005 does not exist or is not executable.
 [2026-01-22 14:57:47 +0000] [90] [INFO] Booting worker with pid: 90
 [2026-01-22 14:57:47 +0000] [73] [INFO] Worker exiting (pid: 73)
 [2026-01-22 14:57:48 +0000] [1] [ERROR] Worker (pid:73) was sent SIGTERM!
+[perf] search_ckan_datasets: 1194.8ms
+[2026-01-22 14:57:54 +0000] [89] [INFO] Worker exiting (pid: 89)
+[perf] search_ckan_datasets: 1285.5ms
+[2026-01-22 14:57:54 +0000] [1] [ERROR] Worker (pid:89) was sent SIGTERM!
+time="2026-01-22T08:58:15-06:00" level=error msg="error waiting for container: unexpected EOF"

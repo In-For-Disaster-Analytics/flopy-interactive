@@ -6,6 +6,7 @@ import warnings
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from shapely.geometry import Point
 
@@ -16,6 +17,15 @@ warnings.filterwarnings(
     message="The 'shapely.geos' module is deprecated",
     category=DeprecationWarning,
 )
+
+
+def _sanitize_lon_lat(frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Normalize coordinate helper columns to finite numeric values."""
+    frame["_lon"] = pd.to_numeric(frame.get("_lon"), errors="coerce")
+    frame["_lat"] = pd.to_numeric(frame.get("_lat"), errors="coerce")
+    frame["_lon"] = frame["_lon"].replace([np.inf, -np.inf], np.nan)
+    frame["_lat"] = frame["_lat"].replace([np.inf, -np.inf], np.nan)
+    return frame
 
 
 def load_grid_gdf(grid_gdb: Path, layer_name: str) -> gpd.GeoDataFrame:
@@ -45,7 +55,7 @@ def _prepare_grid_gdf(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         centroids = gdf.geometry.centroid
         gdf["_lon"] = centroids.x
         gdf["_lat"] = centroids.y
-        return gdf
+        return _sanitize_lon_lat(gdf)
 
     try:
         if gdf.crs.is_geographic:
@@ -64,7 +74,7 @@ def _prepare_grid_gdf(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     gdf["_lon"] = centroids_ll.x
     gdf["_lat"] = centroids_ll.y
     gdf = gdf.to_crs("EPSG:4326")
-    return gdf
+    return _sanitize_lon_lat(gdf)
 
 
 def _load_grid_from_gdb(gdb_path: Path) -> gpd.GeoDataFrame:
@@ -125,7 +135,7 @@ def _load_grid_from_csv(csv_path: Path) -> gpd.GeoDataFrame:
         else:
             geometry.append(Point(float(lon), float(lat)))
     gdf = gpd.GeoDataFrame(df, geometry=geometry)
-    return gdf
+    return _sanitize_lon_lat(gdf)
 
 
 def load_grid_resource(resource: dict, dest_dir: Path) -> gpd.GeoDataFrame:

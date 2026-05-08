@@ -38,3 +38,9 @@ barton_springs_2001_2010average.wel
 /dash/ckan_data/barton-springs-gam/grid
 dash/ckan_data/barton-springs-gam/rch/barton_springs_2001_2010average.rch
 /dash/ckan_data
+/node_modules
+/dist
+/.venv-react
+__pycache__/
+flopy_interactive/__pycache__/
+flopy_interactive/data/__pycache__/

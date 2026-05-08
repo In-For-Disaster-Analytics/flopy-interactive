@@ -16,6 +16,7 @@ from flopy_interactive.config import CKAN_BASE_URL, RCH_STANDARD_VAR, WEL_STANDA
 from flopy_interactive.ckankit.search import extract_standard_vars, resource_has_standard_var
 
 CKAN_URL = os.environ.get("FLOPY_CKAN_URL", CKAN_BASE_URL)
+TAPIS_BASE_URL = os.environ.get("FLOPY_TAPIS_BASE_URL", "https://tacc.tapis.io").rstrip("/")
 
 
 def _now_iso() -> str:
@@ -136,7 +137,7 @@ def get_tapis_token(username: str, password: str) -> str:
     Returns:
         Tapis access token string.
     """
-    tapis = Tapis(base_url="https://portals.tapis.io", username=username, password=password)
+    tapis = Tapis(base_url=TAPIS_BASE_URL, username=username, password=password)
     tapis.get_tokens()
     return tapis.access_token.access_token
 

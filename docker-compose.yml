@@ -1,0 +1,20 @@
+services:
+  flopy-interactive:
+    build:
+      context: .
+      dockerfile: Dockerfile.react
+    ports:
+      - "5050:5050"
+    environment:
+      FLOPY_CKAN_URL: ${FLOPY_CKAN_URL:-https://ckan.tacc.utexas.edu}
+      FLOPY_TAPIS_BASE_URL: ${FLOPY_TAPIS_BASE_URL:-https://tacc.tapis.io}
+      FLOPY_CKAN_JWT: ${FLOPY_CKAN_JWT:-}
+      FLOPY_TAPIS_USERNAME: ${FLOPY_TAPIS_USERNAME:-}
+      FLOPY_TAPIS_PASSWORD: ${FLOPY_TAPIS_PASSWORD:-}
+      FLOPY_WORKFLOWS_BASE_URL: ${FLOPY_WORKFLOWS_BASE_URL:-https://tacc.tapis.io/v3/workflows}
+      FLOPY_WORKFLOW_GROUP_ID: ${FLOPY_WORKFLOW_GROUP_ID:-}
+      FLOPY_WORKFLOW_PIPELINE_ID: ${FLOPY_WORKFLOW_PIPELINE_ID:-flopy-apply-flux-percent}
+      FLOPY_WORKFLOW_ARCHIVE_IDS: ${FLOPY_WORKFLOW_ARCHIVE_IDS:-}
+    volumes:
+      - ./ckan_data:/data/ckan_data
+      - ./docker-output:/data/output

@@ -1,12 +1,12 @@
 This template is the first in a [series of tutorials](#next-tutorials) that will guide you through the process of creating a cookbook and running it on TACC systems. From simple ones that run a command to more complex ones that run a Python using conda or a Jupyter Notebook.
 
-## Dash dashboard
+## Interactive web app
 
-This repo includes a Plotly Dash dashboard for WEL/RCH visualization and updates. It loads datasets from CKAN on startup.
+This repo now includes a React frontend backed by a small Flask API for WEL/RCH visualization and updates. The map layer uses Leaflet in the browser, and the backend can pass ETL-style apply/publish work through to Tapis Workflows function tasks. The previous Dash app remains available under [`dash/`](./dash).
 
 ### Code organization
 
-Shared logic now lives in the `flopy_interactive/` package (CKAN search, data loaders, and visualization helpers). The Dash app in `dash/` imports from this package, and `flopy_wel_map.py` remains as a compatibility wrapper for notebooks.
+Shared logic lives in the `flopy_interactive/` package (CKAN search, data loaders, update helpers, workflow gateway helpers, and the Flask API). The React app lives at the repository root (`src/`, `package.json`, `vite.config.js`), the Dash app remains in `dash/`, and `flopy_wel_map.py` remains as a compatibility wrapper for notebooks.
 
 ### Dataset discovery
 
@@ -16,13 +16,61 @@ Datasets appear in the Dash dropdown only if CKAN resources advertise these stan
 - RCH: `groundwater__recharge_volume_flux`
 - Grid: `Modflow-Spatially-Distributed-Grid`
 
-### Run locally
+### Run the React app locally
+
+```bash
+conda env create -f environment.react.yml
+conda activate flopy-interactive-react
+npm install
+python3 -m flopy_interactive.api
+npm run dev
+```
+
+The API runs on `http://127.0.0.1:5050` and Vite runs on `http://127.0.0.1:5173`.
+
+`requirements-react.txt` remains available if you need a non-conda fallback, but the intended local setup is conda.
+
+### Build the React app
+
+```bash
+npm run build
+python3 -m flopy_interactive.api
+```
+
+When `dist/` exists, the Flask app serves the built frontend directly.
+
+### Run with Docker
+
+```bash
+docker compose up --build
+```
+
+The web app will be available on `http://127.0.0.1:5050`.
+
+The new container build is defined in [`Dockerfile.react`](./Dockerfile.react) and uses:
+
+- a Node build stage for the React bundle
+- a micromamba runtime stage using [`environment.react.yml`](./environment.react.yml)
+- bind mounts for `ckan_data/` and `docker-output/`
+
+Optional workflow passthrough environment variables:
+
+- `FLOPY_WORKFLOWS_BASE_URL`: workflows API base URL, default `https://tacc.tapis.io/v3/workflows`
+- `FLOPY_WORKFLOW_GROUP_ID`: existing Tapis Workflows group id that owns the pipeline
+- `FLOPY_WORKFLOW_PIPELINE_ID`: pipeline id to create/use, default `flopy-apply-flux-percent`
+- `FLOPY_WORKFLOW_ARCHIVE_IDS`: optional comma-separated archive ids to attach when the pipeline is first created
+
+When `FLOPY_WORKFLOW_GROUP_ID` is set, the backend will ensure the configured pipeline exists, submit a run for `/api/apply`, and poll the workflow run status from the UI. If it is not set, the backend falls back to the existing in-process apply/publish path.
+
+If you do not want a single shared workflow group, the UI also supports per-user workflow registration. After login, the app can prompt for a workflow group id, call the backend registration endpoint, and then use that group id for future apply runs from that browser session.
+
+### Run the legacy Dash app
 
 ```bash
 python3 dash/dash_app.py
 ```
 
-### Docker (production)
+### Docker (legacy Dash production)
 
 ```bash
 docker build -f dash/Dockerfile.dash -t flopy-dash .
@@ -34,6 +82,7 @@ Environment variables:
 - `FLOPY_DATA_DIR`: directory for CKAN downloads (default: `ckan_data`)
 - `FLOPY_OUTPUT_WEL`: output WEL file path (default: `barton_springs_updated.wel`)
 - `FLOPY_CKAN_URL`: CKAN base URL (default: `https://ckan.tacc.utexas.edu`)
+- `FLOPY_TAPIS_BASE_URL`: Tapis tenant base URL used for login/token minting (default: `https://tacc.tapis.io`)
 - `FLOPY_CKAN_JWT`: CKAN JWT token (optional, overrides Tapis login)
 - `FLOPY_TAPIS_USERNAME`: Tapis username (used to mint CKAN JWT)
 - `FLOPY_TAPIS_PASSWORD`: Tapis password (used to mint CKAN JWT)
