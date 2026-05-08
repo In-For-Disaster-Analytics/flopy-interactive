@@ -10,6 +10,8 @@ __pycache__
 flopy_interactive/__pycache__
 flopy_interactive/data/__pycache__
 dash
+!dash
+!dash/**
 Tutorials
 images
 notebook.ipynb

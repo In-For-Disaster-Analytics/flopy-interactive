@@ -30,23 +30,37 @@ export UPDATE_CONDA_ENV=$2
 export GIT_BRANCH=$3
 
 function install_conda() {
+	CONDA_ROOT="$WORK/miniconda3"
+	CONDA_BIN="$CONDA_ROOT/bin/conda"
+	CONDA_INSTALLER="$CONDA_ROOT/miniconda.sh"
+
 	echo "Checking if miniconda3 is installed..."
-	if [ ! -d "$WORK/miniconda3" ]; then
-		echo "Miniconda not found in $WORK..."
+	if [ ! -x "$CONDA_BIN" ]; then
+		echo "Miniconda missing or incomplete in $CONDA_ROOT..."
 		echo "Installing..."
-		mkdir -p "$WORK/miniconda3"
-		curl https://repo.anaconda.com/miniconda/Miniconda3-py311_23.10.0-1-Linux-x86_64.sh -o "$WORK/miniconda3/miniconda.sh"
-		bash "$WORK/miniconda3/miniconda.sh" -b -u -p "$WORK/miniconda3"
-		rm -rf "$WORK/miniconda3/miniconda.sh"
-		export PATH="$WORK/miniconda3/bin:$PATH"
-		echo "Ensuring conda base environment is OFF..."
-		conda config --set auto_activate_base false
-	else
-		export PATH="$WORK/miniconda3/bin:$PATH"
+		rm -rf "$CONDA_ROOT"
+		mkdir -p "$CONDA_ROOT"
+		curl https://repo.anaconda.com/miniconda/Miniconda3-py311_23.10.0-1-Linux-x86_64.sh -o "$CONDA_INSTALLER"
+		bash "$CONDA_INSTALLER" -b -u -p "$CONDA_ROOT"
+		rm -f "$CONDA_INSTALLER"
 	fi
-	conda init bash
-	echo "Sourcing .bashrc..."
-	source ~/.bashrc
+
+	export PATH="$CONDA_ROOT/bin:$PATH"
+	if ! command -v conda >/dev/null 2>&1; then
+		echo "ERROR: conda command is not available after installation/setup"
+		exit 1
+	fi
+
+	echo "Ensuring conda base environment is OFF..."
+	"$CONDA_BIN" config --set auto_activate_base false
+
+	# Initialize conda for this non-interactive shell without depending on ~/.bashrc edits.
+	if [ -f "$CONDA_ROOT/etc/profile.d/conda.sh" ]; then
+		# shellcheck source=/dev/null
+		source "$CONDA_ROOT/etc/profile.d/conda.sh"
+	else
+		eval "$("$CONDA_BIN" shell.bash hook)"
+	fi
 	unset PYTHONPATH
 }
 
